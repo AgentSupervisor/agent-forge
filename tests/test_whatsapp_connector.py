@@ -230,7 +230,7 @@ class TestHealthCheck:
         connector._http_client = None
         result = await connector.health_check()
         assert result["connected"] is False
-        assert result["details"] == "Not started"
+        assert result["details"] == "HTTP client not initialized"
 
 
 # ------------------------------------------------------------------
@@ -243,6 +243,7 @@ class TestSendMessage:
     async def test_send_text(self, connector):
         mock_response = MagicMock()
         mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
 
         mock_client = MagicMock()
         mock_client.post = AsyncMock(return_value=mock_response)
@@ -254,7 +255,7 @@ class TestSendMessage:
         assert result is True
         mock_client.post.assert_awaited_once()
         call_args = mock_client.post.call_args
-        assert call_args[0][0] == "http://127.0.0.1:3100/send"
+        assert call_args[0][0] == "/send"
         assert call_args[1]["json"]["jid"] == "1234567890@s.whatsapp.net"
         assert call_args[1]["json"]["text"] == "hello"
 
