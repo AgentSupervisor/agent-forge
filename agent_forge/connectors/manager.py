@@ -261,11 +261,11 @@ class ConnectorManager:
                 try:
                     staged = []
                     for media_path in msg.media_paths:
-                        result = await self.media_handler.process_and_stage(
+                        paths, _media_type = await self.media_handler.process_and_stage(
                             source_path=media_path,
-                            worktree_path=agent.worktree_path,
+                            agent_worktree=agent.worktree_path,
                         )
-                        staged.extend(result)
+                        staged.extend(paths)
                     if staged:
                         # Send media references after the start sequence finishes
                         async def _send_media_refs(

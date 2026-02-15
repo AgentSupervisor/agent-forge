@@ -110,6 +110,67 @@ class TelegramGateway:
         return project_name, agent_id, message
 
     # ------------------------------------------------------------------
+    # Smart routing
+    # ------------------------------------------------------------------
+
+    async def _smart_route(
+        self, project_name: str, message: str, update: Update
+    ) -> tuple[object | None, bool]:
+        """Smart load balancer: find an available agent or spawn a new one.
+
+        Returns (agent, newly_spawned) or (None, False) if routing failed.
+        """
+        from .agent_manager import AgentStatus
+
+        agents = self.agent_manager.list_agents(project_name=project_name)
+        active_agents = [a for a in agents if a.status != AgentStatus.STOPPED]
+
+        # No agents → auto-spawn
+        if not active_agents:
+            try:
+                agent = await self.agent_manager.spawn_agent(
+                    project_name, task=message
+                )
+                return agent, True
+            except RuntimeError as exc:
+                await update.message.reply_text(f"Failed to spawn agent: {exc}")
+                return None, False
+
+        # Prefer IDLE agents
+        idle_agents = [a for a in active_agents if a.status == AgentStatus.IDLE]
+        if idle_agents:
+            agent = max(idle_agents, key=lambda a: a.last_activity)
+            await self.agent_manager.clear_context(agent.id)
+            agent.task_description = message[:200]
+            return agent, False
+
+        # All busy — spawn if under limit
+        config = self.agent_manager.registry.config
+        max_agents = config.get_max_agents(project_name)
+        if len(active_agents) < max_agents:
+            try:
+                agent = await self.agent_manager.spawn_agent(
+                    project_name, task=message
+                )
+                return agent, True
+            except RuntimeError as exc:
+                await update.message.reply_text(f"Failed to spawn agent: {exc}")
+                return None, False
+
+        # At limit and all busy
+        busy_list = "\n".join(
+            f"  [{a.status.value}] `{a.id}`"
+            + (f" — {a.task_description}" if a.task_description else "")
+            for a in active_agents
+        )
+        await update.message.reply_text(
+            f"All agents for *{project_name}* are busy"
+            f" ({len(active_agents)}/{max_agents}):\n{busy_list}",
+            parse_mode="Markdown",
+        )
+        return None, False
+
+    # ------------------------------------------------------------------
     # Command handlers
     # ------------------------------------------------------------------
 
@@ -245,25 +306,37 @@ class TelegramGateway:
             if not agent:
                 await update.message.reply_text(f"Agent `{agent_id}` not found.")
                 return
-        else:
-            # Route to most recently active agent for the project
-            agents = self.agent_manager.list_agents(project_name=project_name)
-            if not agents:
+            success = await self.agent_manager.send_message(agent.id, message)
+            if success:
                 await update.message.reply_text(
-                    f"No active agents for *{project_name}*. Use /spawn first.",
+                    f"Sent to `{agent.id}` ({project_name})",
                     parse_mode="Markdown",
                 )
-                return
-            agent = max(agents, key=lambda a: a.last_activity)
+            else:
+                await update.message.reply_text(f"Failed to send message to `{agent.id}`.")
+            return
 
-        success = await self.agent_manager.send_message(agent.id, message)
-        if success:
+        # Smart routing: find or spawn an agent
+        agent, newly_spawned = await self._smart_route(
+            project_name, message, update
+        )
+        if agent is None:
+            return
+
+        if newly_spawned:
             await update.message.reply_text(
-                f"Sent to `{agent.id}` ({project_name})",
+                f"Spawned agent `{agent.id}` for *{project_name}*",
                 parse_mode="Markdown",
             )
         else:
-            await update.message.reply_text(f"Failed to send message to `{agent.id}`.")
+            success = await self.agent_manager.send_message(agent.id, message)
+            if success:
+                await update.message.reply_text(
+                    f"Sent to `{agent.id}` ({project_name})",
+                    parse_mode="Markdown",
+                )
+            else:
+                await update.message.reply_text(f"Failed to send message to `{agent.id}`.")
 
     # ------------------------------------------------------------------
     # Media message handler
@@ -304,14 +377,11 @@ class TelegramGateway:
                 await update.message.reply_text(f"Agent `{agent_id}` not found.")
                 return
         else:
-            agents = self.agent_manager.list_agents(project_name=project_name)
-            if not agents:
-                await update.message.reply_text(
-                    f"No active agents for *{project_name}*. Use /spawn first.",
-                    parse_mode="Markdown",
-                )
+            agent, newly_spawned = await self._smart_route(
+                project_name, message, update
+            )
+            if agent is None:
                 return
-            agent = max(agents, key=lambda a: a.last_activity)
 
         # Download attachment to temp directory
         try:
