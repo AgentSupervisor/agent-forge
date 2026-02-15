@@ -260,22 +260,34 @@ class ConnectorManager:
             if msg.media_paths and self.media_handler:
                 try:
                     staged = []
+                    last_media_type = None
                     for media_path in msg.media_paths:
-                        paths, _media_type = await self.media_handler.process_and_stage(
+                        paths, media_type = await self.media_handler.process_and_stage(
                             source_path=media_path,
                             agent_worktree=agent.worktree_path,
                         )
                         staged.extend(paths)
+                        last_media_type = media_type
                     if staged:
+                        media_context = ""
+                        if last_media_type is not None:
+                            media_context = self.media_handler.build_media_reference(
+                                staged, last_media_type
+                            )
                         # Send media references after the start sequence finishes
                         async def _send_media_refs(
-                            aid: str = agent.id, paths: list[str] = staged
+                            aid: str = agent.id,
+                            ctx: str = media_context,
+                            paths: list[str] = staged,
                         ) -> None:
                             await asyncio.sleep(5.0)
-                            refs = "\n".join(f"  - {p}" for p in paths)
-                            await self.agent_manager.send_message(
-                                aid, f"Media files staged:\n{refs}"
-                            )
+                            if ctx:
+                                await self.agent_manager.send_message(aid, ctx)
+                            else:
+                                refs = "\n".join(f"  - {p}" for p in paths)
+                                await self.agent_manager.send_message(
+                                    aid, f"Media files staged:\n{refs}"
+                                )
 
                         asyncio.ensure_future(_send_media_refs())
                     file_list = "\n".join(f"  - {p}" for p in staged)

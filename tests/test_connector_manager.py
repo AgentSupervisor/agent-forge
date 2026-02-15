@@ -220,6 +220,14 @@ class TestMediaRouting:
         mock_conn.send_message = AsyncMock(return_value=True)
         connector_manager.connectors["my-tg"] = mock_conn
 
+        # Ensure the default agent is IDLE so smart routing picks it
+        idle_agent = _make_mock_agent(
+            status=AgentStatus.IDLE,
+            worktree_path=str(tmp_path / "worktree"),
+        )
+        mock_agent_manager.list_agents.return_value = [idle_agent]
+        mock_agent_manager.get_agent.return_value = idle_agent
+
         # Create a temp file to simulate a connector download
         temp_file = tmp_path / "forge_media_123" / "photo.png"
         temp_file.parent.mkdir(parents=True)
@@ -247,7 +255,7 @@ class TestMediaRouting:
         # Verify process_and_stage was called with correct args
         mock_media.process_and_stage.assert_called_once_with(
             source_path=str(temp_file),
-            agent_worktree=mock_agent_manager.get_agent.return_value.worktree_path,
+            agent_worktree=idle_agent.worktree_path,
         )
         # Verify build_media_reference was called
         mock_media.build_media_reference.assert_called_once()
@@ -264,6 +272,14 @@ class TestMediaRouting:
         mock_conn = AsyncMock()
         mock_conn.send_message = AsyncMock(return_value=True)
         connector_manager.connectors["my-tg"] = mock_conn
+
+        # IDLE agent so smart routing picks it (existing-agent path cleans up)
+        idle_agent = _make_mock_agent(
+            status=AgentStatus.IDLE,
+            worktree_path=str(tmp_path / "worktree"),
+        )
+        mock_agent_manager.list_agents.return_value = [idle_agent]
+        mock_agent_manager.get_agent.return_value = idle_agent
 
         temp_file = tmp_path / "forge_media_456" / "doc.pdf"
         temp_file.parent.mkdir(parents=True)
@@ -296,6 +312,14 @@ class TestMediaRouting:
         mock_conn = AsyncMock()
         mock_conn.send_message = AsyncMock(return_value=True)
         connector_manager.connectors["my-tg"] = mock_conn
+
+        # IDLE agent so smart routing picks it (existing-agent path has finally cleanup)
+        idle_agent = _make_mock_agent(
+            status=AgentStatus.IDLE,
+            worktree_path=str(tmp_path / "worktree"),
+        )
+        mock_agent_manager.list_agents.return_value = [idle_agent]
+        mock_agent_manager.get_agent.return_value = idle_agent
 
         temp_file = tmp_path / "forge_media_789" / "bad.png"
         temp_file.parent.mkdir(parents=True)
