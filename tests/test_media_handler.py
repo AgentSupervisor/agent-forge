@@ -63,15 +63,16 @@ class TestBuildMediaReference:
         ref = handler.build_media_reference(
             [".media/123_photo.png"], MediaType.IMAGE
         )
-        assert "design mockups/images" in ref
+        assert "Image file" in ref
         assert ".media/123_photo.png" in ref
 
     def test_build_media_reference_video(self, handler):
         ref = handler.build_media_reference(
-            [".media/123_frame_001.png", ".media/123_frame_002.png"],
+            [".media/123_clip.mp4", ".media/123_frame_001.png", ".media/123_frame_002.png"],
             MediaType.VIDEO,
         )
-        assert "keyframes" in ref
+        assert ".media/123_clip.mp4" in ref
+        assert "keyframes" in ref.lower() or "frame" in ref.lower()
         assert ".media/123_frame_001.png" in ref
 
     def test_build_media_reference_audio_with_transcript(self, handler):
@@ -188,9 +189,11 @@ class TestProcessAndStage:
             )
 
         assert media_type == MediaType.VIDEO
-        assert len(paths) == 2
+        assert len(paths) == 3
+        assert ".media/1000000_clip.mp4" in paths
         assert ".media/1000000_frame_001.png" in paths
         assert ".media/1000000_frame_002.png" in paths
+        assert paths[0] == ".media/1000000_clip.mp4"  # video file listed first
 
     async def test_process_and_stage_audio_with_transcript(
         self, handler, worktree, tmp_path

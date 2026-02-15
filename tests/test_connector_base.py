@@ -7,6 +7,7 @@ from agent_forge.connectors.base import (
     ConnectorType,
     InboundMessage,
     OutboundMessage,
+    extract_agent_from_text,
 )
 
 
@@ -158,3 +159,34 @@ class TestBaseConnector:
 
         conn.set_message_callback(callback)
         assert conn._message_callback is callback
+
+
+class TestExtractAgentFromText:
+    def test_extracts_agent_id_from_status_message(self):
+        text = "Agent `a1b2c3` (asn-api): IDLE -> WORKING"
+        assert extract_agent_from_text(text) == "a1b2c3"
+
+    def test_extracts_from_sent_message(self):
+        text = "Sent to `ff0011` (edgetimer)"
+        assert extract_agent_from_text(text) == "ff0011"
+
+    def test_extracts_from_waiting_input(self):
+        text = "Agent `dead99` (myproject) is waiting for input"
+        assert extract_agent_from_text(text) == "dead99"
+
+    def test_returns_empty_on_no_match(self):
+        assert extract_agent_from_text("No agent here") == ""
+
+    def test_returns_empty_on_empty_string(self):
+        assert extract_agent_from_text("") == ""
+
+    def test_ignores_non_hex_ids(self):
+        assert extract_agent_from_text("Agent `ghijkl` (proj)") == ""
+
+    def test_ignores_wrong_length(self):
+        assert extract_agent_from_text("Agent `abc12` (proj)") == ""
+        assert extract_agent_from_text("Agent `abc1234` (proj)") == ""
+
+    def test_first_match_wins(self):
+        text = "Sent to `aaa111` then `bbb222`"
+        assert extract_agent_from_text(text) == "aaa111"
