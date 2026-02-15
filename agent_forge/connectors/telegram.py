@@ -255,7 +255,7 @@ class TelegramConnector(BaseConnector):
         project_name, agent_id = self._parse_routing(text)
         if project_name:
             # Strip the @project[:agent] prefix from the text
-            match = re.match(r"^@[\w-]+(?::[\w-]+)?\s+(.*)", text, re.DOTALL)
+            match = re.match(r"^@[\w-]+(?::[\w-]+)?[:\s]\s*(.*)", text, re.DOTALL)
             text = match.group(1).strip() if match else text
 
         msg = InboundMessage(
@@ -281,7 +281,7 @@ class TelegramConnector(BaseConnector):
         caption = update.message.caption or ""
         project_name, agent_id = self._parse_routing(caption)
         if project_name:
-            match = re.match(r"^@[\w-]+(?::[\w-]+)?\s+(.*)", caption, re.DOTALL)
+            match = re.match(r"^@[\w-]+(?::[\w-]+)?[:\s]\s*(.*)", caption, re.DOTALL)
             caption = match.group(1).strip() if match else caption
 
         # Download attachment
@@ -364,7 +364,7 @@ class TelegramConnector(BaseConnector):
     @staticmethod
     def _parse_routing(text: str) -> tuple[str, str]:
         """Extract @project[:agent_id] from text. Returns (project, agent_id)."""
-        match = re.match(r"^@([\w-]+)(?::([\w-]+))?\s", text)
+        match = re.match(r"^@([\w-]+)(?::([\w-]+))?[:\s]", text)
         if not match:
             return "", ""
         return match.group(1), match.group(2) or ""

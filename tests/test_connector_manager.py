@@ -463,6 +463,19 @@ class TestParseTarget:
         assert "Line 1" in t
         assert "Line 3" in t
 
+    def test_trailing_colon_after_project(self):
+        p, a, t = ConnectorManager._parse_target("@python_analyzer: Can you run shot detection?")
+        assert p == "python_analyzer"
+        assert a == ""
+        assert t == "Can you run shot detection?"
+
+    def test_trailing_colon_with_agent_id(self):
+        """@proj:abc123 still works as project:agent_id syntax."""
+        p, a, t = ConnectorManager._parse_target("@proj:abc123 Do this")
+        assert p == "proj"
+        assert a == "abc123"
+        assert t == "Do this"
+
 
 class TestControlCommands:
     @pytest.mark.asyncio

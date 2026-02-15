@@ -721,7 +721,7 @@ class ConnectorManager:
         """
         import re
 
-        match = re.match(r"^@([\w-]+)(?::([\w-]+))?\s+(.*)", text, re.DOTALL)
+        match = re.match(r"^@([\w-]+)(?::([\w-]+))?[:\s]\s*(.*)", text, re.DOTALL)
         if not match:
             return "", "", ""
         project_name = match.group(1)

@@ -101,7 +101,7 @@ class TelegramGateway:
         Returns ``(project_name, agent_id | None, message)`` or ``None``
         if the text does not match the expected prefix format.
         """
-        match = re.match(r"^@([\w-]+)(?::([\w-]+))?\s+(.*)", text, re.DOTALL)
+        match = re.match(r"^@([\w-]+)(?::([\w-]+))?[:\s]\s*(.*)", text, re.DOTALL)
         if not match:
             return None
         project_name = match.group(1)
