@@ -1028,3 +1028,107 @@ class TestSmartRouting:
         mock_agent_manager.send_message.assert_called_once()
         mock_agent_manager.spawn_agent.assert_not_called()
         mock_agent_manager.clear_context.assert_not_called()
+
+
+class TestReplyRouting:
+    """Tests for reply-to-message routing (agent_id extracted by connector)."""
+
+    @pytest.fixture
+    def multi_binding_config(self, tmp_git_repo):
+        """Config where two projects are bound to the same channel."""
+        return ForgeConfig(
+            connectors={
+                "my-tg": ConnectorConfig(
+                    type="telegram",
+                    enabled=True,
+                    credentials={"bot_token": "fake-token"},
+                    settings={},
+                ),
+            },
+            projects={
+                "asn-api": ProjectConfig(
+                    path=str(tmp_git_repo),
+                    description="ASN API",
+                    channels=[
+                        ChannelBinding(
+                            connector_id="my-tg",
+                            channel_id="-100123",
+                            channel_name="Shared Channel",
+                            inbound=True,
+                            outbound=True,
+                        ),
+                    ],
+                ),
+                "edgetimer": ProjectConfig(
+                    path=str(tmp_git_repo),
+                    description="EdgeTimer",
+                    channels=[
+                        ChannelBinding(
+                            connector_id="my-tg",
+                            channel_id="-100123",
+                            channel_name="Shared Channel",
+                            inbound=True,
+                            outbound=True,
+                        ),
+                    ],
+                ),
+            },
+        )
+
+    @pytest.fixture
+    def multi_cm(self, mock_agent_manager, multi_binding_config):
+        cm = ConnectorManager(mock_agent_manager, MagicMock(), multi_binding_config)
+        cm._rebuild_channel_map()
+        mock_conn = AsyncMock()
+        mock_conn.send_message = AsyncMock(return_value=True)
+        cm.connectors["my-tg"] = mock_conn
+        return cm
+
+    @pytest.mark.asyncio
+    async def test_multi_binding_reply_via_agent_id(self, multi_cm, mock_agent_manager):
+        """When connector sets agent_id from reply, route succeeds on multi-binding channel."""
+        msg = InboundMessage(
+            connector_id="my-tg",
+            channel_id="-100123",
+            sender_id="42",
+            text="Yes rerun with lower threshold",
+            agent_id="abc123",  # Extracted by connector from reply-to-message
+        )
+        await multi_cm._handle_inbound(msg)
+
+        # Should route successfully (not show "Multiple projects" error)
+        mock_agent_manager.send_message.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_multi_binding_reply_via_sticky_context(self, multi_cm, mock_agent_manager):
+        """When no agent_id but sticky context exists, route succeeds on multi-binding channel."""
+        multi_cm._set_context("my-tg", "-100123", "abc123")
+
+        msg = InboundMessage(
+            connector_id="my-tg",
+            channel_id="-100123",
+            sender_id="42",
+            text="Yes rerun with lower threshold",
+        )
+        await multi_cm._handle_inbound(msg)
+
+        mock_agent_manager.send_message.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_multi_binding_no_context_shows_error(self, multi_cm, mock_agent_manager):
+        """Without agent_id or sticky context, multi-binding shows error."""
+        msg = InboundMessage(
+            connector_id="my-tg",
+            channel_id="-100123",
+            sender_id="42",
+            text="Some bare text",
+        )
+        await multi_cm._handle_inbound(msg)
+
+        # Should NOT route to agent — should show error
+        mock_agent_manager.send_message.assert_not_called()
+        # Reply connector was called with the error message
+        conn = multi_cm.connectors["my-tg"]
+        conn.send_message.assert_called_once()
+        reply_text = conn.send_message.call_args[0][0].text
+        assert "Multiple projects" in reply_text
