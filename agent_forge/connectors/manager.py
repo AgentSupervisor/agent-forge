@@ -32,7 +32,7 @@ class ConnectorManager:
     ) -> None:
         self.agent_manager = agent_manager
         self.media_handler = media_handler
-        self.config = config
+        self._config = config
         self._registry = registry
         self.connectors: dict[str, BaseConnector] = {}
         # (connector_id, channel_id) -> list of (project_name, binding)
@@ -43,6 +43,13 @@ class ConnectorManager:
         # Tracks channels that sent messages to a project so notifications can reach them
         # even without pre-configured channel bindings.
         self._reply_channels: dict[str, set[tuple[str, str]]] = {}
+
+    @property
+    def config(self) -> Any:
+        """Always return the latest config from the registry."""
+        if self._registry is not None:
+            return self._registry.config
+        return self._config
 
     async def start(self) -> None:
         """Instantiate and start all enabled connectors from config."""
