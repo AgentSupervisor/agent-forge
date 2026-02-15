@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import shutil
+from pathlib import Path
 from typing import Any
 
 from .base import ActionButton, BaseConnector, ConnectorType, InboundMessage, OutboundMessage
@@ -299,16 +301,26 @@ class ConnectorManager:
 
         # Send message to an existing agent (with or without media)
         if msg.media_paths and self.media_handler:
+            temp_paths = list(msg.media_paths)
             try:
-                staged = []
+                staged: list[str] = []
+                last_media_type = None
                 for media_path in msg.media_paths:
-                    result = await self.media_handler.process_and_stage(
+                    paths, media_type = await self.media_handler.process_and_stage(
                         source_path=media_path,
-                        worktree_path=agent.worktree_path,
+                        agent_worktree=agent.worktree_path,
                     )
-                    staged.extend(result)
+                    staged.extend(paths)
+                    last_media_type = media_type
+
+                media_context = ""
+                if staged and last_media_type is not None:
+                    media_context = self.media_handler.build_media_reference(
+                        staged, last_media_type
+                    )
+
                 await self.agent_manager.send_message_with_media(
-                    agent.id, msg.text, staged
+                    agent.id, msg.text, staged, media_context=media_context
                 )
                 file_list = "\n".join(f"  - {p}" for p in staged)
                 await self._reply(msg, f"Staged to `{agent.id}` ({project_name}):\n{file_list}")
@@ -317,6 +329,19 @@ class ConnectorManager:
             except Exception:
                 logger.exception("Failed to process media message")
                 await self._reply(msg, "Failed to process media attachment.")
+            finally:
+                # Clean up connector temp files
+                for temp_path in temp_paths:
+                    try:
+                        p = Path(temp_path)
+                        if p.exists():
+                            p.unlink()
+                            # Remove parent dir if it's a forge temp dir and now empty
+                            parent = p.parent
+                            if parent.name.startswith("forge_") and not any(parent.iterdir()):
+                                parent.rmdir()
+                    except OSError:
+                        logger.debug("Failed to clean up temp file: %s", temp_path)
         else:
             success = await self.agent_manager.send_message(agent.id, msg.text)
             if success:
