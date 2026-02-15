@@ -182,6 +182,117 @@ class TestInboundRouting:
         assert "Usage" in reply_text
 
 
+class TestMediaRouting:
+    @pytest.mark.asyncio
+    async def test_media_message_stages_and_sends(
+        self, connector_manager, mock_agent_manager, tmp_path
+    ):
+        """Media paths are processed, staged, and sent with media context."""
+        mock_conn = AsyncMock()
+        mock_conn.send_message = AsyncMock(return_value=True)
+        connector_manager.connectors["my-tg"] = mock_conn
+
+        # Create a temp file to simulate a connector download
+        temp_file = tmp_path / "forge_media_123" / "photo.png"
+        temp_file.parent.mkdir(parents=True)
+        temp_file.write_bytes(b"fake image")
+
+        # Set up media handler mock
+        mock_media = MagicMock()
+        mock_media.process_and_stage = AsyncMock(
+            return_value=([".media/1000_photo.png"], "image")
+        )
+        mock_media.build_media_reference = MagicMock(
+            return_value="I've placed design mockups/images at: .media/1000_photo.png. Please analyze them."
+        )
+        connector_manager.media_handler = mock_media
+
+        msg = InboundMessage(
+            connector_id="my-tg",
+            channel_id="-100123",
+            sender_id="42",
+            text="Check this screenshot",
+            media_paths=[str(temp_file)],
+        )
+        await connector_manager._handle_inbound(msg)
+
+        # Verify process_and_stage was called with correct args
+        mock_media.process_and_stage.assert_called_once_with(
+            source_path=str(temp_file),
+            agent_worktree=mock_agent_manager.get_agent.return_value.worktree_path,
+        )
+        # Verify build_media_reference was called
+        mock_media.build_media_reference.assert_called_once()
+        # Verify send_message_with_media was called with media_context
+        mock_agent_manager.send_message_with_media.assert_called_once()
+        call_kwargs = mock_agent_manager.send_message_with_media.call_args
+        assert "media_context" in call_kwargs.kwargs or len(call_kwargs.args) >= 4
+
+    @pytest.mark.asyncio
+    async def test_media_message_cleans_up_temp_files(
+        self, connector_manager, mock_agent_manager, tmp_path
+    ):
+        """Temp files from connectors are cleaned up after staging."""
+        mock_conn = AsyncMock()
+        mock_conn.send_message = AsyncMock(return_value=True)
+        connector_manager.connectors["my-tg"] = mock_conn
+
+        temp_file = tmp_path / "forge_media_456" / "doc.pdf"
+        temp_file.parent.mkdir(parents=True)
+        temp_file.write_bytes(b"fake pdf")
+
+        mock_media = MagicMock()
+        mock_media.process_and_stage = AsyncMock(
+            return_value=([".media/1000_doc.pdf"], "document")
+        )
+        mock_media.build_media_reference = MagicMock(return_value="doc ref")
+        connector_manager.media_handler = mock_media
+
+        msg = InboundMessage(
+            connector_id="my-tg",
+            channel_id="-100123",
+            sender_id="42",
+            text="Here is the doc",
+            media_paths=[str(temp_file)],
+        )
+        await connector_manager._handle_inbound(msg)
+
+        # Temp file should be cleaned up
+        assert not temp_file.exists()
+
+    @pytest.mark.asyncio
+    async def test_media_failure_still_cleans_up(
+        self, connector_manager, mock_agent_manager, tmp_path
+    ):
+        """Temp files are cleaned up even when processing fails."""
+        mock_conn = AsyncMock()
+        mock_conn.send_message = AsyncMock(return_value=True)
+        connector_manager.connectors["my-tg"] = mock_conn
+
+        temp_file = tmp_path / "forge_media_789" / "bad.png"
+        temp_file.parent.mkdir(parents=True)
+        temp_file.write_bytes(b"bad data")
+
+        mock_media = MagicMock()
+        mock_media.process_and_stage = AsyncMock(side_effect=RuntimeError("ffmpeg failed"))
+        connector_manager.media_handler = mock_media
+
+        msg = InboundMessage(
+            connector_id="my-tg",
+            channel_id="-100123",
+            sender_id="42",
+            text="This will fail",
+            media_paths=[str(temp_file)],
+        )
+        await connector_manager._handle_inbound(msg)
+
+        # Temp file should still be cleaned up
+        assert not temp_file.exists()
+        # Error reply should have been sent
+        reply_text = mock_conn.send_message.call_args[0][0].text
+        assert "Failed" in reply_text
+
+
 class TestOutbound:
     @pytest.mark.asyncio
     async def test_sends_to_outbound_channels(self, connector_manager):
