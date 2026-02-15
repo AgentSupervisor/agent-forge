@@ -3,12 +3,28 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Awaitable
 
 logger = logging.getLogger(__name__)
+
+
+def ensure_extension(filename: str, content_type: str = "") -> str:
+    """Ensure a filename has an extension, guessing from content_type if needed.
+
+    Returns the filename unchanged if it already has an extension.
+    """
+    if Path(filename).suffix:
+        return filename
+    if content_type:
+        ext = mimetypes.guess_extension(content_type.split(";")[0].strip())
+        if ext:
+            return filename + ext
+    return filename
 
 
 class ConnectorType(str, Enum):

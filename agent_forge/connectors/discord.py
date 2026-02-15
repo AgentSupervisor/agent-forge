@@ -459,12 +459,16 @@ class DiscordConnector(BaseConnector):
 
     async def _download_attachments(self, attachments: list[Any]) -> list[str]:
         """Download Discord attachments to temp files."""
+        from .base import ensure_extension
+
         media_paths: list[str] = []
 
         for attachment in attachments:
             try:
                 tmp_dir = tempfile.mkdtemp(prefix="forge_media_")
                 file_name = attachment.filename or "attachment"
+                content_type = getattr(attachment, "content_type", "") or ""
+                file_name = ensure_extension(file_name, content_type)
                 tmp_path = Path(tmp_dir) / file_name
 
                 await attachment.save(tmp_path)
