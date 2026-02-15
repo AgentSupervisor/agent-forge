@@ -584,13 +584,14 @@ class ConnectorManager:
                     continue
                 connector = self.connectors.get(binding.connector_id)
                 if not connector:
+                    logger.warning("Connector %s not found for outbound to %s", binding.connector_id, project_name)
                     continue
                 out = OutboundMessage(channel_id=binding.channel_id, text=text)
                 try:
                     await connector.send_message(out)
                     sent.add((binding.connector_id, binding.channel_id))
                 except Exception:
-                    logger.debug(
+                    logger.exception(
                         "Failed to send outbound to %s/%s",
                         binding.connector_id,
                         binding.channel_id,
