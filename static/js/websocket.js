@@ -165,7 +165,9 @@
         } else {
             terminal.textContent = data.output;
         }
-        terminal.scrollTop = terminal.scrollHeight;
+        if (window._terminalAutoScroll !== false) {
+            terminal.scrollTop = terminal.scrollHeight;
+        }
     }
 
     // Keep connection alive with periodic pings
