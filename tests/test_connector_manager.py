@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from agent_forge.agent_manager import AgentStatus
 from agent_forge.config import (
     ChannelBinding,
     ConnectorConfig,
@@ -15,6 +16,25 @@ from agent_forge.connectors.base import ActionButton, ConnectorType, InboundMess
 from agent_forge.connectors.manager import ConnectorManager
 
 
+def _make_mock_agent(
+    agent_id="abc123",
+    project_name="asn-api",
+    status=AgentStatus.WORKING,
+    task_description="Fix bug",
+    worktree_path="/tmp/test",
+    last_activity=1000,
+):
+    """Create a mock agent with configurable fields."""
+    agent = MagicMock()
+    agent.id = agent_id
+    agent.project_name = project_name
+    agent.status = status
+    agent.task_description = task_description
+    agent.worktree_path = worktree_path
+    agent.last_activity = last_activity
+    return agent
+
+
 @pytest.fixture
 def mock_agent_manager(tmp_git_repo):
     mgr = MagicMock()
@@ -23,15 +43,12 @@ def mock_agent_manager(tmp_git_repo):
         "asn-api": MagicMock(description="ASN API"),
         "edgetimer": MagicMock(description="EdgeTimer"),
     }
+    # Configure max_agents via registry.config
+    mgr.registry.config = MagicMock()
+    mgr.registry.config.get_max_agents.return_value = 5
 
     # Mock agent
-    mock_agent = MagicMock()
-    mock_agent.id = "abc123"
-    mock_agent.project_name = "asn-api"
-    mock_agent.status.value = "working"
-    mock_agent.task_description = "Fix bug"
-    mock_agent.worktree_path = str(tmp_git_repo)
-    mock_agent.last_activity = 1000
+    mock_agent = _make_mock_agent(worktree_path=str(tmp_git_repo))
 
     mgr.get_agent.return_value = mock_agent
     mgr.list_agents.return_value = [mock_agent]
@@ -41,6 +58,7 @@ def mock_agent_manager(tmp_git_repo):
     mgr.send_control = AsyncMock(return_value=True)
     mgr.spawn_agent = AsyncMock(return_value=mock_agent)
     mgr.kill_agent = AsyncMock(return_value=True)
+    mgr.clear_context = AsyncMock(return_value=True)
     return mgr
 
 
@@ -106,6 +124,11 @@ class TestInboundRouting:
         mock_conn.send_message = AsyncMock(return_value=True)
         connector_manager.connectors["my-tg"] = mock_conn
 
+        # Make the agent IDLE so smart routing picks it (not spawns a new one)
+        idle_agent = _make_mock_agent(agent_id="abc123", status=AgentStatus.IDLE)
+        mock_agent_manager.list_agents.return_value = [idle_agent]
+        mock_agent_manager.get_agent.return_value = idle_agent
+
         msg = InboundMessage(
             connector_id="my-tg",
             channel_id="-100123",
@@ -121,6 +144,11 @@ class TestInboundRouting:
         mock_conn = AsyncMock()
         mock_conn.send_message = AsyncMock(return_value=True)
         connector_manager.connectors["my-tg"] = mock_conn
+
+        # Make the agent IDLE so smart routing picks it
+        idle_agent = _make_mock_agent(agent_id="abc123", status=AgentStatus.IDLE)
+        mock_agent_manager.list_agents.return_value = [idle_agent]
+        mock_agent_manager.get_agent.return_value = idle_agent
 
         msg = InboundMessage(
             connector_id="my-tg",
@@ -595,3 +623,260 @@ class TestGetStatus:
         assert status["my-tg"]["type"] == "telegram"
         assert status["my-tg"]["enabled"] is True
         assert status["my-tg"]["running"] is False  # no real connector started
+
+
+class TestSmartRouting:
+    """Tests for the smart load balancer that auto-spawns/assigns agents."""
+
+    @pytest.mark.asyncio
+    async def test_auto_spawns_when_no_agents(self, connector_manager, mock_agent_manager):
+        """When no agents exist, auto-spawn one with the message as the task."""
+        mock_conn = AsyncMock()
+        mock_conn.send_message = AsyncMock(return_value=True)
+        connector_manager.connectors["my-tg"] = mock_conn
+
+        # No agents for the project
+        mock_agent_manager.list_agents.return_value = []
+
+        new_agent = _make_mock_agent(agent_id="new123", status=AgentStatus.STARTING)
+        mock_agent_manager.spawn_agent = AsyncMock(return_value=new_agent)
+
+        msg = InboundMessage(
+            connector_id="my-tg",
+            channel_id="-100123",
+            sender_id="42",
+            text="Fix the login bug",
+        )
+        await connector_manager._handle_inbound(msg)
+
+        # Should have spawned an agent with the message as the task
+        mock_agent_manager.spawn_agent.assert_called_once_with(
+            "asn-api", task="Fix the login bug"
+        )
+        # Should NOT also call send_message (start sequence handles it)
+        mock_agent_manager.send_message.assert_not_called()
+        # Should report spawning to the user
+        reply = mock_conn.send_message.call_args[0][0].text
+        assert "Spawned" in reply
+        assert "new123" in reply
+
+    @pytest.mark.asyncio
+    async def test_picks_idle_agent(self, connector_manager, mock_agent_manager):
+        """When an IDLE agent exists, route to it after clearing context."""
+        mock_conn = AsyncMock()
+        mock_conn.send_message = AsyncMock(return_value=True)
+        connector_manager.connectors["my-tg"] = mock_conn
+
+        idle_agent = _make_mock_agent(
+            agent_id="idle01", status=AgentStatus.IDLE, last_activity=2000
+        )
+        mock_agent_manager.list_agents.return_value = [idle_agent]
+        mock_agent_manager.get_agent.return_value = idle_agent
+
+        msg = InboundMessage(
+            connector_id="my-tg",
+            channel_id="-100123",
+            sender_id="42",
+            text="New task for idle agent",
+        )
+        await connector_manager._handle_inbound(msg)
+
+        # Should clear context before sending
+        mock_agent_manager.clear_context.assert_called_once_with("idle01")
+        # Should send message normally
+        mock_agent_manager.send_message.assert_called_once_with(
+            "idle01", "New task for idle agent"
+        )
+        # Should NOT spawn a new agent
+        mock_agent_manager.spawn_agent.assert_not_called()
+        # Task description should be updated
+        assert idle_agent.task_description == "New task for idle agent"
+
+    @pytest.mark.asyncio
+    async def test_prefers_idle_over_working(self, connector_manager, mock_agent_manager):
+        """When both IDLE and WORKING agents exist, prefer the IDLE one."""
+        mock_conn = AsyncMock()
+        mock_conn.send_message = AsyncMock(return_value=True)
+        connector_manager.connectors["my-tg"] = mock_conn
+
+        working_agent = _make_mock_agent(
+            agent_id="work01", status=AgentStatus.WORKING, last_activity=3000
+        )
+        idle_agent = _make_mock_agent(
+            agent_id="idle01", status=AgentStatus.IDLE, last_activity=1000
+        )
+        mock_agent_manager.list_agents.return_value = [working_agent, idle_agent]
+        mock_agent_manager.get_agent.return_value = idle_agent
+
+        msg = InboundMessage(
+            connector_id="my-tg",
+            channel_id="-100123",
+            sender_id="42",
+            text="Use the idle one",
+        )
+        await connector_manager._handle_inbound(msg)
+
+        mock_agent_manager.clear_context.assert_called_once_with("idle01")
+        mock_agent_manager.send_message.assert_called_once_with(
+            "idle01", "Use the idle one"
+        )
+
+    @pytest.mark.asyncio
+    async def test_spawns_when_all_busy(self, connector_manager, mock_agent_manager):
+        """When all agents are WORKING, spawn a new one if under limit."""
+        mock_conn = AsyncMock()
+        mock_conn.send_message = AsyncMock(return_value=True)
+        connector_manager.connectors["my-tg"] = mock_conn
+
+        working_agent = _make_mock_agent(
+            agent_id="work01", status=AgentStatus.WORKING
+        )
+        mock_agent_manager.list_agents.return_value = [working_agent]
+        mock_agent_manager.registry.config.get_max_agents.return_value = 5
+
+        new_agent = _make_mock_agent(agent_id="new01", status=AgentStatus.STARTING)
+        mock_agent_manager.spawn_agent = AsyncMock(return_value=new_agent)
+
+        msg = InboundMessage(
+            connector_id="my-tg",
+            channel_id="-100123",
+            sender_id="42",
+            text="Busy agents, need a new one",
+        )
+        await connector_manager._handle_inbound(msg)
+
+        mock_agent_manager.spawn_agent.assert_called_once_with(
+            "asn-api", task="Busy agents, need a new one"
+        )
+        mock_agent_manager.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reports_busy_at_limit(self, connector_manager, mock_agent_manager):
+        """When at agent limit and all busy, report to the user."""
+        mock_conn = AsyncMock()
+        mock_conn.send_message = AsyncMock(return_value=True)
+        connector_manager.connectors["my-tg"] = mock_conn
+
+        working_agent = _make_mock_agent(
+            agent_id="work01", status=AgentStatus.WORKING
+        )
+        mock_agent_manager.list_agents.return_value = [working_agent]
+        mock_agent_manager.registry.config.get_max_agents.return_value = 1
+
+        msg = InboundMessage(
+            connector_id="my-tg",
+            channel_id="-100123",
+            sender_id="42",
+            text="No room left",
+        )
+        await connector_manager._handle_inbound(msg)
+
+        mock_agent_manager.spawn_agent.assert_not_called()
+        mock_agent_manager.send_message.assert_not_called()
+        reply = mock_conn.send_message.call_args[0][0].text
+        assert "busy" in reply.lower()
+        assert "1/1" in reply
+
+    @pytest.mark.asyncio
+    async def test_skips_waiting_input_agents(self, connector_manager, mock_agent_manager):
+        """WAITING_INPUT agents should not be picked — spawn a new one instead."""
+        mock_conn = AsyncMock()
+        mock_conn.send_message = AsyncMock(return_value=True)
+        connector_manager.connectors["my-tg"] = mock_conn
+
+        waiting_agent = _make_mock_agent(
+            agent_id="wait01", status=AgentStatus.WAITING_INPUT
+        )
+        mock_agent_manager.list_agents.return_value = [waiting_agent]
+        mock_agent_manager.registry.config.get_max_agents.return_value = 5
+
+        new_agent = _make_mock_agent(agent_id="new01", status=AgentStatus.STARTING)
+        mock_agent_manager.spawn_agent = AsyncMock(return_value=new_agent)
+
+        msg = InboundMessage(
+            connector_id="my-tg",
+            channel_id="-100123",
+            sender_id="42",
+            text="Don't inject into waiting agent",
+        )
+        await connector_manager._handle_inbound(msg)
+
+        # Should NOT send to the waiting agent
+        mock_agent_manager.send_message.assert_not_called()
+        # Should spawn a new one
+        mock_agent_manager.spawn_agent.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ignores_stopped_agents(self, connector_manager, mock_agent_manager):
+        """STOPPED agents should be ignored — auto-spawn if no active ones."""
+        mock_conn = AsyncMock()
+        mock_conn.send_message = AsyncMock(return_value=True)
+        connector_manager.connectors["my-tg"] = mock_conn
+
+        stopped_agent = _make_mock_agent(
+            agent_id="stop01", status=AgentStatus.STOPPED
+        )
+        mock_agent_manager.list_agents.return_value = [stopped_agent]
+
+        new_agent = _make_mock_agent(agent_id="new01", status=AgentStatus.STARTING)
+        mock_agent_manager.spawn_agent = AsyncMock(return_value=new_agent)
+
+        msg = InboundMessage(
+            connector_id="my-tg",
+            channel_id="-100123",
+            sender_id="42",
+            text="Stopped agents dont count",
+        )
+        await connector_manager._handle_inbound(msg)
+
+        mock_agent_manager.spawn_agent.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_spawn_failure_reports_error(self, connector_manager, mock_agent_manager):
+        """When spawn fails, report the error to the user."""
+        mock_conn = AsyncMock()
+        mock_conn.send_message = AsyncMock(return_value=True)
+        connector_manager.connectors["my-tg"] = mock_conn
+
+        mock_agent_manager.list_agents.return_value = []
+        mock_agent_manager.spawn_agent = AsyncMock(
+            side_effect=RuntimeError("Agent limit reached")
+        )
+
+        msg = InboundMessage(
+            connector_id="my-tg",
+            channel_id="-100123",
+            sender_id="42",
+            text="This will fail",
+        )
+        await connector_manager._handle_inbound(msg)
+
+        reply = mock_conn.send_message.call_args[0][0].text
+        assert "Failed to spawn" in reply
+
+    @pytest.mark.asyncio
+    async def test_explicit_agent_id_bypasses_smart_routing(
+        self, connector_manager, mock_agent_manager
+    ):
+        """@project:agent_id should route directly, even if that agent is busy."""
+        mock_conn = AsyncMock()
+        mock_conn.send_message = AsyncMock(return_value=True)
+        connector_manager.connectors["my-tg"] = mock_conn
+
+        busy_agent = _make_mock_agent(
+            agent_id="busy01", status=AgentStatus.WORKING
+        )
+        mock_agent_manager.get_agent.return_value = busy_agent
+
+        msg = InboundMessage(
+            connector_id="my-tg",
+            channel_id="-999",
+            sender_id="42",
+            text="@asn-api:busy01 Direct message",
+        )
+        await connector_manager._handle_inbound(msg)
+
+        # Should send directly, no smart routing
+        mock_agent_manager.send_message.assert_called_once()
+        mock_agent_manager.spawn_agent.assert_not_called()
+        mock_agent_manager.clear_context.assert_not_called()

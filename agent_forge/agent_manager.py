@@ -468,6 +468,20 @@ class AgentManager:
         await self.kill_agent(agent_id)
         return await self.spawn_agent(project_name, task=task, profile=profile)
 
+    async def clear_context(self, agent_id: str) -> bool:
+        """Clear an agent's conversation context by sending /clear to Claude Code.
+
+        Should only be used on IDLE agents. Waits briefly for the command to process.
+        """
+        agent = self.agents.get(agent_id)
+        if not agent:
+            return False
+        success = tmux_utils.send_keys(agent.session_name, "/clear")
+        if success:
+            await asyncio.sleep(1.0)
+            agent.last_activity = datetime.now()
+        return success
+
     async def send_message(self, agent_id: str, message: str) -> bool:
         """Send a text message to an agent's tmux session."""
         agent = self.agents.get(agent_id)
