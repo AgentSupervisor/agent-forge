@@ -63,7 +63,7 @@ class TestBuildMediaReference:
         ref = handler.build_media_reference(
             [".media/123_photo.png"], MediaType.IMAGE
         )
-        assert "design mockups/images" in ref
+        assert "Image file" in ref
         assert ".media/123_photo.png" in ref
 
     def test_build_media_reference_video(self, handler):

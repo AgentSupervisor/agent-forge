@@ -288,24 +288,37 @@ class TelegramConnector(BaseConnector):
         media_paths: list[str] = []
         try:
             file_obj = None
+            fallback_ext = ""
             if update.message.photo:
                 file_obj = await update.message.photo[-1].get_file()
+                fallback_ext = ".jpg"
             elif update.message.video:
                 file_obj = await update.message.video.get_file()
+                fallback_ext = ".mp4"
+            elif update.message.video_note:
+                file_obj = await update.message.video_note.get_file()
+                fallback_ext = ".mp4"
+            elif update.message.animation:
+                file_obj = await update.message.animation.get_file()
+                fallback_ext = ".mp4"
             elif update.message.audio:
                 file_obj = await update.message.audio.get_file()
+                fallback_ext = ".mp3"
             elif update.message.voice:
                 file_obj = await update.message.voice.get_file()
+                fallback_ext = ".ogg"
+            elif update.message.sticker:
+                file_obj = await update.message.sticker.get_file()
+                fallback_ext = ".webp"
             elif update.message.document:
                 file_obj = await update.message.document.get_file()
 
             if file_obj:
                 tmp_dir = tempfile.mkdtemp(prefix="forge_media_")
-                file_name = (
-                    Path(file_obj.file_path).name
-                    if file_obj.file_path
-                    else "attachment"
-                )
+                if file_obj.file_path:
+                    file_name = Path(file_obj.file_path).name
+                else:
+                    file_name = f"attachment{fallback_ext}"
                 tmp_path = Path(tmp_dir) / file_name
                 await file_obj.download_to_drive(str(tmp_path))
                 media_paths.append(str(tmp_path))
