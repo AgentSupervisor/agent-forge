@@ -1,0 +1,721 @@
+{% extends "base.html" %}
+{% block title %}Settings - Agent Forge{% endblock %}
+{% block nav_settings %}active{% endblock %}
+
+{% block content %}
+<div x-data="settingsPage()" x-init="init()">
+
+    <!-- Header bar -->
+    <div class="stats-bar">
+        <div class="stat-item">
+            <span class="stat-value">Settings</span>
+        </div>
+        <div style="width:1px; height:24px; background:var(--border); margin:0 4px;"></div>
+        <div class="stat-item">
+            <span class="stat-value">{{ total_agents }}</span>
+            <span>Active agents</span>
+        </div>
+        <div style="flex:1;"></div>
+        <button class="btn btn-ghost btn-sm" onclick="reloadConfig()">Reload Config</button>
+    </div>
+
+    <!-- Content -->
+    <div style="padding: 24px;">
+
+        <!-- Connectors section -->
+        <div style="margin-bottom:32px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+                <h2 style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted);">Connectors</h2>
+                <button class="btn btn-primary btn-sm" @click="openAddConnector()">+ Add Connector</button>
+            </div>
+
+            <template x-if="Object.keys(connectors).length === 0">
+                <div class="agent-card" style="cursor:default; text-align:center; padding:32px; color:var(--text-muted); font-size:13px;">
+                    No connectors configured. Add a Telegram, Discord, Slack, WhatsApp, or Signal connector.
+                </div>
+            </template>
+
+            <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:16px;">
+                <template x-for="(conn, connId) in connectors" :key="connId">
+                    <div class="agent-card" style="cursor:default;">
+                        <div class="card-header">
+                            <span class="card-id" x-text="connId"></span>
+                            <span class="status-badge"
+                                  :class="conn.enabled ? 'working' : 'idle'"
+                                  x-text="conn.type"></span>
+                        </div>
+
+                        <!-- Credential summary -->
+                        <div style="font-size:12px; color:var(--text-muted); margin:8px 0;">
+                            <template x-if="conn.type === 'telegram' || conn.type === 'discord'">
+                                <div>
+                                    <span>Token: </span>
+                                    <span style="font-family:monospace;" x-text="conn.credentials.bot_token || '(not set)'"></span>
+                                </div>
+                            </template>
+                            <template x-if="conn.type === 'slack'">
+                                <div>
+                                    <span>Bot Token: </span>
+                                    <span style="font-family:monospace;" x-text="conn.credentials.bot_token || '(not set)'"></span>
+                                </div>
+                            </template>
+                            <template x-if="conn.type === 'whatsapp' || conn.type === 'signal'">
+                                <div>
+                                    <span>Phone: </span>
+                                    <span style="font-family:monospace;" x-text="conn.credentials.phone_number || '(not set)'"></span>
+                                </div>
+                            </template>
+                        </div>
+
+                        <!-- Status -->
+                        <div style="font-size:11px; margin:8px 0;">
+                            <span :style="conn.running ? 'color:var(--status-working)' : 'color:var(--text-muted)'"
+                                  x-text="conn.running ? 'Running' : (conn.enabled ? 'Stopped' : 'Disabled')"></span>
+                        </div>
+
+                        <!-- Actions -->
+                        <div style="display:flex; gap:8px; margin-top:12px; padding-top:12px; border-top:1px solid var(--border);">
+                            <button class="btn btn-ghost btn-xs" @click="openEditConnector(connId, conn)">Edit</button>
+                            <button class="btn btn-ghost btn-xs" @click="testConnector(connId)" :disabled="connectorTesting === connId">
+                                <span x-text="connectorTesting === connId ? 'Testing...' : 'Test'"></span>
+                            </button>
+                            <button class="btn btn-ghost btn-xs" @click="openTestMessage(connId)" :disabled="!conn.running">
+                                Send Test
+                            </button>
+                            <button class="btn btn-danger btn-xs" @click="deleteConnectorTarget = connId; deleteConnectorOpen = true">Delete</button>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+
+        <!-- Server section -->
+        <div style="margin-bottom:32px;">
+            <h2 style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); margin-bottom:12px;">Server</h2>
+            <div class="agent-card" style="cursor:default; max-width:600px;">
+                <div style="display:flex; flex-direction:column; gap:10px; font-size:13px;">
+                    <div style="display:flex; justify-content:space-between;">
+                        <span style="color:var(--text-muted);">Host</span>
+                        <span style="font-family:monospace;">{{ config.server.host }}</span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between;">
+                        <span style="color:var(--text-muted);">Port</span>
+                        <span style="font-family:monospace;">{{ config.server.port }}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Agent Defaults section -->
+        <div>
+            <h2 style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); margin-bottom:12px;">Agent Defaults</h2>
+            <div class="agent-card" style="cursor:default; max-width:600px;">
+                <div style="display:flex; flex-direction:column; gap:16px;">
+
+                    <!-- Max agents per project -->
+                    <div class="detail-section" style="padding:0; border-bottom:none;">
+                        <h3>Max Agents per Project</h3>
+                        <input type="number"
+                               x-model.number="defaults.max_agents_per_project"
+                               class="input"
+                               min="1"
+                               max="50"
+                               style="max-width:120px;">
+                    </div>
+
+                    <!-- Claude command -->
+                    <div class="detail-section" style="padding:0; border-bottom:none;">
+                        <h3>Claude Command</h3>
+                        <input type="text"
+                               x-model="defaults.claude_command"
+                               class="input"
+                               placeholder="claude"
+                               style="font-family:'JetBrains Mono',monospace; font-size:12px;">
+                    </div>
+
+                    <!-- Environment variables -->
+                    <div class="detail-section" style="padding:0; border-bottom:none;">
+                        <h3>Environment Variables</h3>
+                        <div style="display:flex; flex-direction:column; gap:6px;">
+                            <template x-for="(row, idx) in defaults.env_rows" :key="idx">
+                                <div style="display:flex; gap:6px; align-items:center;">
+                                    <input type="text"
+                                           x-model="row.key"
+                                           class="input"
+                                           placeholder="KEY"
+                                           style="flex:2; font-family:'JetBrains Mono',monospace; font-size:12px;">
+                                    <span style="color:var(--text-muted); font-size:13px; flex-shrink:0;">=</span>
+                                    <input type="text"
+                                           x-model="row.value"
+                                           class="input"
+                                           placeholder="value"
+                                           style="flex:3; font-family:'JetBrains Mono',monospace; font-size:12px;">
+                                    <button class="btn btn-ghost btn-xs"
+                                            @click="defaults.env_rows.splice(idx, 1)"
+                                            title="Remove"
+                                            style="flex-shrink:0; color:var(--status-error); padding:4px 8px;">
+                                        &#10005;
+                                    </button>
+                                </div>
+                            </template>
+                            <button class="btn btn-ghost btn-xs"
+                                    @click="defaults.env_rows.push({key:'', value:''})"
+                                    style="align-self:flex-start; margin-top:4px;">
+                                + Add Variable
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Poll interval -->
+                    <div class="detail-section" style="padding:0; border-bottom:none;">
+                        <h3>Poll Interval (seconds)</h3>
+                        <input type="number"
+                               x-model.number="defaults.poll_interval_seconds"
+                               class="input"
+                               min="0.5"
+                               max="60"
+                               step="0.5"
+                               style="max-width:120px;">
+                    </div>
+
+                    <!-- Agent Instructions -->
+                    <div class="detail-section" style="padding:0; border-bottom:none;">
+                        <h3>Agent Instructions</h3>
+                        <p style="font-size:11px; color:var(--text-muted); margin:0 0 8px;">Injected into every agent's CLAUDE.md</p>
+                        <textarea class="textarea" rows="6" x-model="defaults.agent_instructions"
+                                  placeholder="Instructions that will be added to every agent..."
+                                  style="font-family:'JetBrains Mono',monospace; font-size:12px; line-height:1.6; resize:vertical;"></textarea>
+                    </div>
+
+                    <!-- Save button -->
+                    <div style="display:flex; justify-content:flex-end; padding-top:8px; border-top:1px solid var(--border);">
+                        <button class="btn btn-primary btn-sm"
+                                @click="saveDefaults()"
+                                :disabled="defaultsSaving">
+                            <span x-show="!defaultsSaving">Save Defaults</span>
+                            <span x-show="defaultsSaving">Saving...</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Connector Form Modal -->
+    <template x-if="connectorModalOpen">
+        <div class="modal-overlay" @click.self="connectorModalOpen = false" @keydown.escape.window="connectorModalOpen = false">
+            <div class="modal-panel" @click.stop>
+                <h3 style="font-size:15px; font-weight:600; margin-bottom:20px;" x-text="connectorEditMode ? 'Edit Connector' : 'Add Connector'"></h3>
+                <form @submit.prevent="submitConnector()" style="display:flex; flex-direction:column; gap:14px;">
+                    <!-- Type -->
+                    <div>
+                        <label style="display:block; font-size:12px; font-weight:500; color:var(--text-secondary); margin-bottom:6px;">Type</label>
+                        <select class="input" x-model="connectorForm.type" :disabled="connectorEditMode"
+                                @change="!connectorEditMode && autoGenerateId()">
+                            <option value="telegram">Telegram</option>
+                            <option value="discord">Discord</option>
+                            <option value="slack">Slack</option>
+                            <option value="whatsapp">WhatsApp</option>
+                            <option value="signal">Signal</option>
+                        </select>
+                    </div>
+                    <!-- Setup guide -->
+                    <template x-if="!connectorEditMode">
+                        <div style="background:rgba(59,130,246,0.06); border:1px solid rgba(59,130,246,0.15); border-radius:8px; padding:10px 14px; font-size:12px; line-height:1.6; color:var(--text-secondary);">
+                            <template x-if="connectorForm.type === 'telegram'">
+                                <div>
+                                    Create a bot via <a href="https://t.me/BotFather" target="_blank" rel="noopener" style="color:var(--accent); text-decoration:none; font-weight:500;">@BotFather</a> on Telegram.
+                                    Use <span style="font-family:monospace;">/newbot</span>, follow the prompts, and paste the token below.
+                                    <div style="margin-top:6px; padding-top:6px; border-top:1px solid rgba(59,130,246,0.15);">
+                                        <strong>Important:</strong> Telegram bots can't list channels on their own. After creating the connector, send <span style="font-family:monospace;">/start</span> to the bot in a DM, or add it to a group and send a <span style="font-family:monospace;">/command</span> (regular messages won't reach the bot in groups due to privacy mode).
+                                    </div>
+                                </div>
+                            </template>
+                            <template x-if="connectorForm.type === 'discord'">
+                                <div>
+                                    Create an application in the <a href="https://discord.com/developers/applications" target="_blank" rel="noopener" style="color:var(--accent); text-decoration:none; font-weight:500;">Discord Developer Portal</a>.
+                                    Add a Bot, enable Message Content Intent, then copy the bot token.
+                                </div>
+                            </template>
+                            <template x-if="connectorForm.type === 'slack'">
+                                <div>
+                                    Create an app at <a href="https://api.slack.com/apps" target="_blank" rel="noopener" style="color:var(--accent); text-decoration:none; font-weight:500;">api.slack.com/apps</a>.
+                                    Enable Socket Mode for the app token, and add OAuth scopes for the bot token.
+                                </div>
+                            </template>
+                            <template x-if="connectorForm.type === 'whatsapp'">
+                                <div>
+                                    Set up a WhatsApp Business account via <a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener" style="color:var(--accent); text-decoration:none; font-weight:500;">Meta for Developers</a>.
+                                    Register a phone number and configure the webhook.
+                                </div>
+                            </template>
+                            <template x-if="connectorForm.type === 'signal'">
+                                <div>
+                                    Requires <a href="https://github.com/bbernhard/signal-cli-rest-api" target="_blank" rel="noopener" style="color:var(--accent); text-decoration:none; font-weight:500;">signal-cli-rest-api</a> running locally.
+                                    Register or link a phone number, then enter it below.
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+
+                    <!-- ID -->
+                    <div>
+                        <label style="display:block; font-size:12px; font-weight:500; color:var(--text-secondary); margin-bottom:6px;">Connector ID</label>
+                        <input class="input" type="text" x-model="connectorForm.id" :disabled="connectorEditMode"
+                               :style="connectorEditMode && 'opacity:0.5; cursor:not-allowed;'"
+                               placeholder="my-telegram" required>
+                    </div>
+                    <!-- Enabled -->
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <input type="checkbox" x-model="connectorForm.enabled" id="conn-enabled">
+                        <label for="conn-enabled" style="font-size:12px; color:var(--text-secondary);">Enabled</label>
+                    </div>
+                    <!-- Telegram/Discord: bot_token -->
+                    <template x-if="connectorForm.type === 'telegram' || connectorForm.type === 'discord'">
+                        <div>
+                            <label style="display:block; font-size:12px; font-weight:500; color:var(--text-secondary); margin-bottom:6px;">Bot Token</label>
+                            <div style="position:relative;">
+                                <input class="input" :type="showBotToken ? 'text' : 'password'" x-model="connectorForm.credentials.bot_token"
+                                       :placeholder="connectorEditMode ? 'Leave empty to keep current token' : 'Enter bot token'"
+                                       style="font-family:'JetBrains Mono',monospace; font-size:12px; padding-right:36px;">
+                                <button type="button" @click="showBotToken = !showBotToken"
+                                        style="position:absolute; right:8px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; padding:2px; color:var(--text-muted); font-size:14px; line-height:1;"
+                                        :title="showBotToken ? 'Hide token' : 'Show token'">
+                                    <svg x-show="!showBotToken" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                    <svg x-show="showBotToken" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                                </button>
+                            </div>
+                        </div>
+                    </template>
+                    <!-- Telegram: allowed_users -->
+                    <template x-if="connectorForm.type === 'telegram'">
+                        <div>
+                            <label style="display:block; font-size:12px; font-weight:500; color:var(--text-secondary); margin-bottom:6px;">Allowed User IDs</label>
+                            <textarea class="textarea" rows="3" x-model="connectorForm.settings.allowed_users_text"
+                                      placeholder="One per line (empty = allow all)"
+                                      style="font-family:'JetBrains Mono',monospace; font-size:12px; line-height:1.8;"></textarea>
+                        </div>
+                    </template>
+                    <!-- Slack: bot_token + app_token -->
+                    <template x-if="connectorForm.type === 'slack'">
+                        <div style="display:flex; flex-direction:column; gap:10px;">
+                            <div>
+                                <label style="display:block; font-size:12px; font-weight:500; color:var(--text-secondary); margin-bottom:6px;">Bot Token</label>
+                                <input class="input" type="password" x-model="connectorForm.credentials.bot_token"
+                                       placeholder="xoxb-..."
+                                       style="font-family:'JetBrains Mono',monospace; font-size:12px;">
+                            </div>
+                            <div>
+                                <label style="display:block; font-size:12px; font-weight:500; color:var(--text-secondary); margin-bottom:6px;">App Token</label>
+                                <input class="input" type="password" x-model="connectorForm.credentials.app_token"
+                                       placeholder="xapp-..."
+                                       style="font-family:'JetBrains Mono',monospace; font-size:12px;">
+                            </div>
+                        </div>
+                    </template>
+                    <!-- WhatsApp/Signal: phone_number -->
+                    <template x-if="connectorForm.type === 'whatsapp' || connectorForm.type === 'signal'">
+                        <div>
+                            <label style="display:block; font-size:12px; font-weight:500; color:var(--text-secondary); margin-bottom:6px;">Phone Number</label>
+                            <input class="input" type="text" x-model="connectorForm.credentials.phone_number"
+                                   placeholder="+1234567890"
+                                   style="font-family:'JetBrains Mono',monospace; font-size:12px;">
+                        </div>
+                    </template>
+                    <!-- Discord: guild_ids -->
+                    <template x-if="connectorForm.type === 'discord'">
+                        <div>
+                            <label style="display:block; font-size:12px; font-weight:500; color:var(--text-secondary); margin-bottom:6px;">Guild IDs</label>
+                            <textarea class="textarea" rows="2" x-model="connectorForm.settings.guild_ids_text"
+                                      placeholder="One per line"
+                                      style="font-family:'JetBrains Mono',monospace; font-size:12px;"></textarea>
+                        </div>
+                    </template>
+                    <!-- Actions -->
+                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:6px;">
+                        <button type="button" class="btn btn-ghost btn-sm" @click="connectorModalOpen = false">Cancel</button>
+                        <button type="submit" class="btn btn-primary btn-sm" :disabled="connectorSaving">
+                            <span x-text="connectorSaving ? 'Saving...' : (connectorEditMode ? 'Save Changes' : 'Add Connector')"></span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </template>
+
+    <!-- Send Test Message Modal -->
+    <template x-if="testMessageOpen">
+        <div class="modal-overlay" @click.self="testMessageOpen = false" @keydown.escape.window="testMessageOpen = false">
+            <div class="modal-panel" @click.stop style="max-width:460px;">
+                <h3 style="font-size:15px; font-weight:600; margin-bottom:6px;">Send Test Message</h3>
+                <p style="font-size:12px; color:var(--text-muted); margin-bottom:16px;">
+                    Send a test message via <strong x-text="testMessageConnector" style="color:var(--text-secondary);"></strong> to verify delivery.
+                </p>
+
+                <!-- Recent channels -->
+                <div x-show="testMessageChannels.length > 0" style="margin-bottom:12px;">
+                    <label style="display:block; font-size:11px; color:var(--text-muted); margin-bottom:6px;">Recent Chats</label>
+                    <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                        <template x-for="ch in testMessageChannels" :key="ch.id">
+                            <button class="btn btn-ghost btn-xs"
+                                    @click="testMessageChannelId = ch.id; testMessageChannelName = ch.name"
+                                    :style="testMessageChannelId === ch.id ? 'background:rgba(59,130,246,0.15); color:var(--accent); border-color:var(--accent);' : ''"
+                                    style="font-size:11px;">
+                                <span x-text="ch.name"></span>
+                                <span style="color:var(--text-muted); margin-left:4px; font-family:monospace; font-size:10px;" x-text="ch.id"></span>
+                            </button>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Telegram hint -->
+                <div x-show="testMessageChannels.length === 0 && testMessageConnectorType === 'telegram'"
+                     style="background:rgba(59,130,246,0.06); border:1px solid rgba(59,130,246,0.15); border-radius:8px; padding:10px 14px; font-size:12px; line-height:1.6; color:var(--text-secondary); margin-bottom:12px;">
+                    No recent chats yet. Send any message to the bot first, then reopen this dialog to see it here.
+                    You can also paste a chat ID directly.
+                </div>
+
+                <!-- Channel ID input -->
+                <div style="margin-bottom:14px;">
+                    <label style="display:block; font-size:11px; color:var(--text-muted); margin-bottom:4px;">Channel / Chat ID</label>
+                    <div style="display:flex; gap:8px;">
+                        <input class="input" type="text" x-model="testMessageChannelId"
+                               placeholder="e.g. -1001234567890 or your user ID"
+                               style="flex:1; font-family:monospace; font-size:12px;">
+                        <button class="btn btn-ghost btn-xs" @click="validateTestChannel()" :disabled="!testMessageChannelId || testMessageValidating"
+                                style="flex-shrink:0;">
+                            <span x-text="testMessageValidating ? '...' : 'Validate'"></span>
+                        </button>
+                    </div>
+                    <!-- Validation result -->
+                    <div x-show="testMessageChannelName" style="font-size:11px; color:var(--status-working); margin-top:4px;">
+                        Resolved: <span x-text="testMessageChannelName"></span>
+                    </div>
+                </div>
+
+                <!-- Actions -->
+                <div style="display:flex; justify-content:flex-end; gap:8px;">
+                    <button class="btn btn-ghost btn-sm" @click="testMessageOpen = false">Cancel</button>
+                    <button class="btn btn-primary btn-sm" @click="sendTestMessage()"
+                            :disabled="!testMessageChannelId || testMessageSending">
+                        <span x-text="testMessageSending ? 'Sending...' : 'Send Test Message'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- Delete Connector Confirmation -->
+    <template x-if="deleteConnectorOpen">
+        <div class="modal-overlay" @click.self="deleteConnectorOpen = false" @keydown.escape.window="deleteConnectorOpen = false">
+            <div class="modal-panel" @click.stop style="max-width:400px;">
+                <h3 style="font-size:15px; font-weight:600; margin-bottom:12px;">Delete Connector</h3>
+                <p style="font-size:13px; color:var(--text-secondary); line-height:1.6; margin-bottom:20px;">
+                    Are you sure you want to delete <strong x-text="deleteConnectorTarget" style="color:var(--text-primary);"></strong>?
+                    Channel bindings using this connector will also be removed.
+                </p>
+                <div style="display:flex; justify-content:flex-end; gap:8px;">
+                    <button class="btn btn-ghost btn-sm" @click="deleteConnectorOpen = false">Cancel</button>
+                    <button class="btn btn-danger btn-sm" @click="deleteConnector()">Delete</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function settingsPage() {
+    return {
+        defaultsSaving: false,
+        connectors: {},
+        connectorModalOpen: false,
+        connectorEditMode: false,
+        showBotToken: false,
+        connectorForm: { id: '', type: 'telegram', enabled: true, credentials: {}, settings: {} },
+        deleteConnectorOpen: false,
+        deleteConnectorTarget: '',
+        connectorSaving: false,
+        connectorTesting: null,
+        testMessageOpen: false,
+        testMessageConnector: '',
+        testMessageConnectorType: '',
+        testMessageChannelId: '',
+        testMessageChannelName: '',
+        testMessageChannels: [],
+        testMessageSending: false,
+        testMessageValidating: false,
+
+        defaults: {
+            max_agents_per_project: 5,
+            claude_command: 'claude',
+            poll_interval_seconds: 3.0,
+            env_rows: [],
+            agent_instructions: ''
+        },
+
+        async init() {
+            // Load connectors
+            await this.loadConnectors();
+
+            // Defaults
+            this.defaults.max_agents_per_project = {{ config.defaults.max_agents_per_project | tojson }};
+            this.defaults.claude_command = {{ config.defaults.claude_command | tojson }};
+            this.defaults.poll_interval_seconds = {{ config.defaults.poll_interval_seconds | tojson }};
+            this.defaults.agent_instructions = {{ config.defaults.agent_instructions | tojson }};
+
+            // Convert env dict to rows
+            const envDict = {{ config.defaults.claude_env | tojson }};
+            this.defaults.env_rows = Object.entries(envDict).map(([key, value]) => ({ key, value }));
+        },
+
+        async loadConnectors() {
+            try {
+                const res = await fetch('/api/config/connectors');
+                if (res.ok) {
+                    this.connectors = await res.json();
+                }
+            } catch (e) {
+                console.error('Failed to load connectors', e);
+            }
+        },
+
+        openAddConnector() {
+            this.connectorEditMode = false;
+            this.showBotToken = false;
+            this.connectorForm = {
+                id: '', type: 'telegram', enabled: true,
+                credentials: {}, settings: {}
+            };
+            this.connectorModalOpen = true;
+        },
+
+        openEditConnector(connId, conn) {
+            this.connectorEditMode = true;
+            this.showBotToken = false;
+            // Clear masked credential values so user sees empty field + placeholder
+            const creds = {};
+            for (const [k, v] of Object.entries(conn.credentials || {})) {
+                creds[k] = (typeof v === 'string' && v.includes('***')) ? '' : v;
+            }
+            this.connectorForm = {
+                id: connId,
+                type: conn.type,
+                enabled: conn.enabled,
+                credentials: creds,
+                settings: { ...conn.settings }
+            };
+            // Format list settings for editing
+            if (conn.type === 'telegram' && conn.settings.allowed_users) {
+                this.connectorForm.settings.allowed_users_text =
+                    (conn.settings.allowed_users || []).join('\n');
+            }
+            if (conn.type === 'discord' && conn.settings.guild_ids) {
+                this.connectorForm.settings.guild_ids_text =
+                    (conn.settings.guild_ids || []).join('\n');
+            }
+            this.connectorModalOpen = true;
+        },
+
+        autoGenerateId() {
+            if (!this.connectorEditMode && !this.connectorForm.id) {
+                const hex = Math.random().toString(16).slice(2, 6);
+                this.connectorForm.id = this.connectorForm.type + '-' + hex;
+            }
+        },
+
+        async submitConnector() {
+            this.connectorSaving = true;
+            try {
+                // Build settings
+                const settings = { ...this.connectorForm.settings };
+                if (this.connectorForm.type === 'telegram' && settings.allowed_users_text !== undefined) {
+                    settings.allowed_users = settings.allowed_users_text
+                        .split('\n').map(l => l.trim()).filter(l => l).map(Number).filter(n => !isNaN(n));
+                    delete settings.allowed_users_text;
+                }
+                if (this.connectorForm.type === 'discord' && settings.guild_ids_text !== undefined) {
+                    settings.guild_ids = settings.guild_ids_text
+                        .split('\n').map(l => l.trim()).filter(l => l);
+                    delete settings.guild_ids_text;
+                }
+
+                const url = this.connectorEditMode
+                    ? '/api/config/connectors/' + encodeURIComponent(this.connectorForm.id)
+                    : '/api/config/connectors';
+                const method = this.connectorEditMode ? 'PUT' : 'POST';
+                // In edit mode, only send credentials that were actually changed (non-empty)
+                let credentials = this.connectorForm.credentials;
+                if (this.connectorEditMode) {
+                    credentials = {};
+                    for (const [k, v] of Object.entries(this.connectorForm.credentials)) {
+                        if (v) credentials[k] = v;
+                    }
+                    // null signals "keep existing" when no fields changed
+                    if (Object.keys(credentials).length === 0) credentials = null;
+                }
+                const body = this.connectorEditMode
+                    ? { enabled: this.connectorForm.enabled, credentials, settings }
+                    : { id: this.connectorForm.id, type: this.connectorForm.type, enabled: this.connectorForm.enabled, credentials: this.connectorForm.credentials, settings };
+
+                const res = await fetch(url, {
+                    method, headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+
+                if (res.ok) {
+                    showToast(this.connectorEditMode ? 'Connector updated' : 'Connector added');
+                    this.connectorModalOpen = false;
+                    await this.loadConnectors();
+                } else {
+                    const detail = await res.json().then(d => d.detail || 'unknown error').catch(() => res.statusText);
+                    showToast('Failed: ' + detail, true);
+                }
+            } catch (e) {
+                showToast('Failed: ' + e.message, true);
+            } finally {
+                this.connectorSaving = false;
+            }
+        },
+
+        async deleteConnector() {
+            try {
+                const res = await fetch('/api/config/connectors/' + encodeURIComponent(this.deleteConnectorTarget), { method: 'DELETE' });
+                if (res.ok) {
+                    showToast('Connector deleted');
+                    this.deleteConnectorOpen = false;
+                    await this.loadConnectors();
+                } else {
+                    const detail = await res.json().then(d => d.detail || 'unknown').catch(() => res.statusText);
+                    showToast('Delete failed: ' + detail, true);
+                }
+            } catch (e) {
+                showToast('Delete failed: ' + e.message, true);
+            }
+        },
+
+        async openTestMessage(connId) {
+            this.testMessageConnector = connId;
+            this.testMessageConnectorType = this.connectors[connId]?.type || '';
+            this.testMessageChannelId = '';
+            this.testMessageChannelName = '';
+            this.testMessageChannels = [];
+            this.testMessageOpen = true;
+
+            // Fetch recent channels
+            try {
+                const res = await fetch('/api/config/connectors/' + encodeURIComponent(connId) + '/channels');
+                if (res.ok) {
+                    const data = await res.json();
+                    this.testMessageChannels = data.channels || [];
+                }
+            } catch (e) {}
+        },
+
+        async validateTestChannel() {
+            if (!this.testMessageChannelId) return;
+            this.testMessageValidating = true;
+            this.testMessageChannelName = '';
+            try {
+                const res = await fetch('/api/config/connectors/' + encodeURIComponent(this.testMessageConnector) + '/validate-channel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ channel_id: this.testMessageChannelId })
+                });
+                const data = await res.json();
+                if (data.valid && data.channel) {
+                    this.testMessageChannelName = data.channel.name || '';
+                } else {
+                    showToast('Channel not found or unreachable', true);
+                }
+            } catch (e) {
+                showToast('Validation failed: ' + e.message, true);
+            } finally {
+                this.testMessageValidating = false;
+            }
+        },
+
+        async sendTestMessage() {
+            if (!this.testMessageChannelId) return;
+            this.testMessageSending = true;
+            try {
+                const res = await fetch('/api/config/connectors/' + encodeURIComponent(this.testMessageConnector) + '/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ channel_id: this.testMessageChannelId })
+                });
+                const data = await res.json();
+                if (data.health?.test_message?.sent) {
+                    showToast('Test message sent!');
+                    this.testMessageOpen = false;
+                } else {
+                    const detail = data.health?.test_message?.detail || data.detail || 'Failed to send';
+                    showToast('Send failed: ' + detail, true);
+                }
+            } catch (e) {
+                showToast('Send failed: ' + e.message, true);
+            } finally {
+                this.testMessageSending = false;
+            }
+        },
+
+        async testConnector(connId) {
+            this.connectorTesting = connId;
+            try {
+                const res = await fetch('/api/config/connectors/' + encodeURIComponent(connId) + '/test', { method: 'POST' });
+                const data = await res.json();
+                if (data.health && data.health.connected) {
+                    showToast('Connector ' + connId + ' is connected');
+                } else {
+                    showToast('Connector ' + connId + ': ' + (data.health?.details || data.detail || 'not connected'), true);
+                }
+            } catch (e) {
+                showToast('Test failed: ' + e.message, true);
+            } finally {
+                this.connectorTesting = null;
+            }
+        },
+
+        async saveDefaults() {
+            this.defaultsSaving = true;
+            try {
+                // Build env dict from rows
+                const claude_env = {};
+                for (const row of this.defaults.env_rows) {
+                    const key = row.key.trim();
+                    if (key) {
+                        claude_env[key] = row.value;
+                    }
+                }
+
+                const res = await fetch('/api/config/defaults', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        max_agents_per_project: this.defaults.max_agents_per_project,
+                        claude_command: this.defaults.claude_command,
+                        claude_env: claude_env,
+                        poll_interval_seconds: this.defaults.poll_interval_seconds,
+                        agent_instructions: this.defaults.agent_instructions
+                    })
+                });
+
+                if (res.ok) {
+                    showToast('Default settings saved');
+                } else {
+                    const detail = await res.json().then(d => d.detail || 'unknown error').catch(() => res.statusText);
+                    showToast('Save failed: ' + detail, true);
+                }
+            } catch (e) {
+                showToast('Save failed: ' + e.message, true);
+            } finally {
+                this.defaultsSaving = false;
+            }
+        }
+    };
+}
+</script>
+{% endblock %}

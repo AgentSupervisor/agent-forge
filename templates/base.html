@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Agent Forge{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    borderColor: { DEFAULT: '#282d38' },
+                    textColor: { DEFAULT: '#e2e8f0' },
+                    backgroundColor: { DEFAULT: '#0a0c10' }
+                }
+            }
+        }
+    </script>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script defer src="https://unpkg.com/alpinejs@3.14.9/dist/cdn.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css?v={{ cache_bust | default('1') }}">
+</head>
+<body x-data="{ sidebarCollapsed: localStorage.getItem('sidebar') === 'collapsed' }"
+      @keydown.window="handleGlobalKeys($event)">
+
+    <!-- Sidebar -->
+    <aside class="sidebar" :class="{ collapsed: sidebarCollapsed }">
+        <div class="sidebar-brand">
+            <img src="/static/img/logo-transparent.webp" alt="Agent Forge" class="brand-logo">
+            <span class="brand-text">Agent Forge</span>
+        </div>
+        <nav class="sidebar-nav">
+            <a href="/" class="sidebar-link {% block nav_home %}{% endblock %}">
+                <span class="link-icon">&#9776;</span>
+                <span class="link-text">Dashboard</span>
+            </a>
+            <a href="/config" class="sidebar-link {% block nav_config %}{% endblock %}">
+                <span class="link-icon">&#9635;</span>
+                <span class="link-text">Projects</span>
+            </a>
+            <a href="/console" class="sidebar-link {% block nav_console %}{% endblock %}">
+                <span class="link-icon">&#9002;</span>
+                <span class="link-text">Console</span>
+            </a>
+            <a href="/settings" class="sidebar-link {% block nav_settings %}{% endblock %}">
+                <span class="link-icon">&#9881;</span>
+                <span class="link-text">Settings</span>
+            </a>
+        </nav>
+        <div class="sidebar-toggle">
+            <button @click="sidebarCollapsed = !sidebarCollapsed; localStorage.setItem('sidebar', sidebarCollapsed ? 'collapsed' : 'expanded')"
+                    :title="sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'">
+                <span x-text="sidebarCollapsed ? '&#9654;' : '&#9664;'"></span>
+            </button>
+        </div>
+    </aside>
+
+    <!-- Main content -->
+    <div class="main-content" :style="{ marginLeft: sidebarCollapsed ? '56px' : '220px' }">
+        {% block content %}{% endblock %}
+    </div>
+
+    <script src="/static/js/ansi_up.js"></script>
+    <script src="/static/js/websocket.js"></script>
+    <script>
+        function showToast(msg, isError = false) {
+            const el = document.createElement('div');
+            el.className = 'toast ' + (isError ? 'toast-error' : 'toast-success');
+            el.textContent = msg;
+            document.body.appendChild(el);
+            setTimeout(() => {
+                el.style.opacity = '0';
+                setTimeout(() => el.remove(), 300);
+            }, 2500);
+        }
+
+        async function reloadConfig() {
+            try {
+                const res = await fetch('/api/config/reload', { method: 'POST' });
+                if (res.ok) showToast('Config reloaded');
+                else {
+                    const detail = await res.json().then(d => d.detail || 'unknown').catch(() => res.statusText);
+                    showToast('Reload failed: ' + detail, true);
+                }
+            } catch (e) { showToast('Reload failed: ' + e.message, true); }
+        }
+
+        function handleGlobalKeys(e) {
+            // Ctrl+K or Cmd+K: Open spawn modal
+            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                e.preventDefault();
+                const modal = document.querySelector('[x-data]');
+                if (modal && modal.__x) {
+                    modal.__x.$data.spawnModalOpen = true;
+                }
+                // Also dispatch a custom event
+                window.dispatchEvent(new CustomEvent('open-spawn-modal'));
+            }
+            // Ctrl+/ or Cmd+/: Toggle sidebar
+            if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+                e.preventDefault();
+                const body = document.body.__x;
+                if (body) {
+                    body.$data.sidebarCollapsed = !body.$data.sidebarCollapsed;
+                    localStorage.setItem('sidebar', body.$data.sidebarCollapsed ? 'collapsed' : 'expanded');
+                }
+            }
+        }
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
