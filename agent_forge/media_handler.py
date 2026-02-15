@@ -31,9 +31,18 @@ class MediaHandler:
         self.temp_dir.mkdir(parents=True, exist_ok=True)
 
     async def process_and_stage(
-        self, source_path: str, media_type: MediaType, agent_worktree: str
-    ) -> list[str]:
-        """Process media and stage in worktree. Returns relative paths to staged files."""
+        self,
+        source_path: str,
+        agent_worktree: str,
+        media_type: MediaType | None = None,
+    ) -> tuple[list[str], MediaType]:
+        """Process media and stage in worktree.
+
+        Returns (staged_paths, detected_media_type) so callers can use
+        build_media_reference().
+        """
+        if media_type is None:
+            media_type = self._detect_type(source_path)
         media_dir = self._ensure_media_dir(agent_worktree)
         timestamp = int(time.time())
         source = Path(source_path)
@@ -81,7 +90,7 @@ class MediaHandler:
             shutil.copy2(source_path, dest)
             staged_paths.append(f".media/{dest_name}")
 
-        return staged_paths
+        return staged_paths, media_type
 
     def _ensure_media_dir(self, worktree: str) -> Path:
         media_dir = Path(worktree) / ".media"
