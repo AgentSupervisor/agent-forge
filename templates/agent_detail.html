@@ -25,9 +25,15 @@
         </div>
 
         <!-- Terminal output -->
-        <div id="terminal-view"
-             class="terminal-container"
-             style="flex:1; border-radius:0;">{{ terminal_output }}</div>
+        <div style="position:relative; flex:1; min-height:0;">
+            <div id="terminal-view"
+                 class="terminal-container"
+                 style="position:absolute; inset:0; border-radius:0;">{{ terminal_output }}</div>
+            <button id="autoscroll-btn"
+                    onclick="window._terminalAutoScroll=true; this.style.display='none'; var el=document.getElementById('terminal-view'); el.scrollTop=el.scrollHeight;"
+                    style="display:none; position:absolute; bottom:12px; right:20px; z-index:10; background:rgba(30,30,40,0.85); border:1px solid var(--border); color:var(--text-muted); font-size:18px; width:32px; height:32px; border-radius:50%; cursor:pointer; line-height:1;"
+                    title="Auto-scroll paused — click to resume">&#8595;</button>
+        </div>
 
         <!-- Message input bar (below terminal, like a prompt) -->
         <div style="display:flex; align-items:center; gap:10px; padding:10px 16px; border-top:1px solid var(--border); background:var(--bg-surface); flex-shrink:0;">
@@ -129,6 +135,28 @@ window._ansiUp.escape_for_html = true;
     }
 })();
 
+// Auto-scroll state: pause when user scrolls up, resume when near bottom
+window._terminalAutoScroll = true;
+(function () {
+    var el = document.getElementById('terminal-view');
+    var btn = document.getElementById('autoscroll-btn');
+    if (!el) return;
+    var debounceTimer;
+    el.addEventListener('scroll', function () {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(function () {
+            var atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+            if (atBottom && !window._terminalAutoScroll) {
+                window._terminalAutoScroll = true;
+                if (btn) btn.style.display = 'none';
+            } else if (!atBottom && window._terminalAutoScroll) {
+                window._terminalAutoScroll = false;
+                if (btn) btn.style.display = 'block';
+            }
+        }, 100);
+    });
+})();
+
 function agentDetail() {
     return {
         messageText: '',
@@ -219,7 +247,9 @@ async function refreshTerminal() {
             } else {
                 el.textContent = data.output;
             }
-            el.scrollTop = el.scrollHeight;
+            if (window._terminalAutoScroll) {
+                el.scrollTop = el.scrollHeight;
+            }
         }
     } catch (e) { /* silent */ }
 }

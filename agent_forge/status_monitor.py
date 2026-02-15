@@ -145,11 +145,12 @@ class StatusMonitor:
     async def _notify_channels(self, project_name: str, text: str) -> None:
         """Send status notification to bound IM channels (best-effort)."""
         if not self.connector_manager:
+            logger.debug("No connector_manager; skipping notification for %s", project_name)
             return
         try:
             await self.connector_manager.send_to_project_channels(project_name, text)
         except Exception:
-            logger.debug("Failed to notify channels for %s", project_name)
+            logger.exception("Failed to notify channels for %s", project_name)
 
     async def _notify_waiting_input(
         self, agent_id: str, project_name: str, output: str
