@@ -44,6 +44,12 @@ STATIC_DIR = ROOT_DIR / "static"
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
     config_path = getattr(app.state, "config_path", "config.yaml")
+    demo_mode = getattr(app.state, "demo_mode", False)
+
+    # In demo mode, create a minimal config if none exists
+    if demo_mode and not Path(config_path).exists():
+        Path(config_path).write_text("server:\n  port: 8080\n")
+
     registry = ProjectRegistry(config_path)
     config = registry.config
 
@@ -62,18 +68,20 @@ async def lifespan(app: FastAPI):
     agent_manager = AgentManager(registry, config.defaults)
     agent_manager._db = db
 
-    # Try to import and start StatusMonitor (Phase 2)
+    # Try to import and start StatusMonitor (Phase 2) — skip in demo mode
     status_monitor = None
-    try:
-        from .status_monitor import StatusMonitor
+    if not demo_mode:
+        try:
+            from .status_monitor import StatusMonitor
 
-        status_monitor = StatusMonitor(
-            agent_manager, ws_manager, db, config.defaults.poll_interval_seconds,
-        )
-        await status_monitor.start()
-        logger.info("StatusMonitor started")
-    except ImportError:
-        logger.warning("status_monitor module not available; skipping")
+            status_monitor = StatusMonitor(
+                agent_manager, ws_manager, db, config.defaults.poll_interval_seconds,
+                config=config,
+            )
+            await status_monitor.start()
+            logger.info("StatusMonitor started")
+        except ImportError:
+            logger.warning("status_monitor module not available; skipping")
 
     # Migrate legacy telegram config to connectors if needed
     bot_token = config.get_bot_token()
@@ -102,12 +110,20 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("Failed to start ConnectorManager")
 
-    # Recover existing tmux sessions
-    await agent_manager.recover_sessions()
+    # Recover existing tmux sessions (skip in demo mode)
+    if not demo_mode:
+        await agent_manager.recover_sessions()
 
     # Wire ConnectorManager into StatusMonitor for outbound notifications
     if status_monitor and connector_manager:
         status_monitor.connector_manager = connector_manager
+
+    # Inject demo data if requested
+    if demo_mode:
+        from .demo import inject_demo_config, populate_mock_agents
+        inject_demo_config(config)
+        populate_mock_agents(agent_manager)
+        logger.info("Demo mode: injected %d mock agents", len(agent_manager.agents))
 
     # Store on app.state for access in routes
     app.state.config = config
@@ -1262,6 +1278,7 @@ def cli():
     parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
     parser.add_argument("--host", default=None, help="Override server host")
     parser.add_argument("--port", type=int, default=None, help="Override server port")
+    parser.add_argument("--demo", action="store_true", help="Populate mock agents for screenshots")
     args = parser.parse_args()
 
     # Pre-load config to extract host/port defaults
@@ -1272,6 +1289,7 @@ def cli():
     port = args.port or server_cfg.get("port", 8080)
 
     app.state.config_path = args.config
+    app.state.demo_mode = args.demo
 
     logging.basicConfig(
         level=logging.INFO,

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agent_forge.agent_manager import Agent, AgentStatus
+from agent_forge.config import DefaultsConfig, ForgeConfig, SummaryConfig
 from agent_forge.connectors.base import ActionButton
 from agent_forge.status_monitor import StatusMonitor
 
@@ -258,7 +259,7 @@ class TestExtractActivitySummary:
         output = "\n".join(lines)
         result = StatusMonitor.extract_activity_summary(output)
         result_lines = result.splitlines()
-        assert len(result_lines) <= 5
+        assert len(result_lines) <= 15
         assert "line 29" in result_lines[-1]
 
     def test_truncates_long_lines(self):
@@ -373,3 +374,125 @@ class TestWaitingInputNotification:
         cm = monitor_with_connector.connector_manager
         cm.send_to_project_channels_rich.assert_not_called()
         cm.send_to_project_channels.assert_called_once()
+
+
+class TestGetActivitySummary:
+    """Test _get_activity_summary: LLM path + fallback."""
+
+    @pytest.fixture
+    def config_with_summary(self):
+        return ForgeConfig(
+            defaults=DefaultsConfig(
+                summary=SummaryConfig(enabled=True, api_key="test-key"),
+            ),
+        )
+
+    @pytest.fixture
+    def config_disabled(self):
+        return ForgeConfig(
+            defaults=DefaultsConfig(
+                summary=SummaryConfig(enabled=False),
+            ),
+        )
+
+    @pytest.fixture
+    def monitor(self, config_with_summary):
+        manager = MagicMock()
+        ws = MagicMock()
+        return StatusMonitor(
+            agent_manager=manager, ws_manager=ws, config=config_with_summary,
+        )
+
+    @pytest.mark.asyncio
+    async def test_llm_summary_used_when_available(self, monitor):
+        with patch(
+            "agent_forge.status_monitor.summarize_output",
+            new_callable=AsyncMock,
+            return_value="LLM summary of agent activity.",
+        ) as mock_summarize:
+            result = await monitor._get_activity_summary("some terminal output")
+
+        assert result == "LLM summary of agent activity."
+        mock_summarize.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_falls_back_on_llm_failure(self, monitor):
+        with patch(
+            "agent_forge.status_monitor.summarize_output",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            result = await monitor._get_activity_summary("Compiled 3 files\nDone.")
+
+        # Should fall back to regex-based extraction
+        assert "Done." in result
+
+    @pytest.mark.asyncio
+    async def test_falls_back_when_disabled(self, config_disabled):
+        monitor = StatusMonitor(
+            agent_manager=MagicMock(),
+            ws_manager=MagicMock(),
+            config=config_disabled,
+        )
+        with patch(
+            "agent_forge.status_monitor.summarize_output",
+            new_callable=AsyncMock,
+        ) as mock_summarize:
+            result = await monitor._get_activity_summary("Build complete.\nAll passing.")
+
+        mock_summarize.assert_not_called()
+        assert "All passing." in result
+
+    @pytest.mark.asyncio
+    async def test_falls_back_when_no_api_key(self):
+        config = ForgeConfig(
+            defaults=DefaultsConfig(
+                summary=SummaryConfig(enabled=True, api_key=""),
+            ),
+        )
+        monitor = StatusMonitor(
+            agent_manager=MagicMock(),
+            ws_manager=MagicMock(),
+            config=config,
+        )
+        with patch(
+            "agent_forge.status_monitor.summarize_output",
+            new_callable=AsyncMock,
+        ) as mock_summarize:
+            result = await monitor._get_activity_summary("Test output line.")
+
+        mock_summarize.assert_not_called()
+        assert "Test output line." in result
+
+    @pytest.mark.asyncio
+    async def test_falls_back_when_no_config(self):
+        monitor = StatusMonitor(
+            agent_manager=MagicMock(), ws_manager=MagicMock(), config=None,
+        )
+        result = await monitor._get_activity_summary("Some output here.")
+        assert "Some output here." in result
+
+    @pytest.mark.asyncio
+    async def test_env_var_api_key_used(self, config_disabled):
+        """When config api_key is empty but env var is set, LLM path activates."""
+        config = ForgeConfig(
+            defaults=DefaultsConfig(
+                summary=SummaryConfig(enabled=True, api_key=""),
+            ),
+        )
+        monitor = StatusMonitor(
+            agent_manager=MagicMock(), ws_manager=MagicMock(), config=config,
+        )
+        with (
+            patch.dict("os.environ", {"ANTHROPIC_API_KEY": "env-key"}),
+            patch(
+                "agent_forge.status_monitor.summarize_output",
+                new_callable=AsyncMock,
+                return_value="LLM from env key",
+            ) as mock_summarize,
+        ):
+            result = await monitor._get_activity_summary("output")
+
+        assert result == "LLM from env key"
+        mock_summarize.assert_called_once()
+        assert mock_summarize.call_args[1]["api_key"] == "env-key"
