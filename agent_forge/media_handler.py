@@ -48,52 +48,47 @@ class MediaHandler:
         source = Path(source_path)
         staged_paths: list[str] = []
 
+        # Always stage the original file first
+        dest_name = f"{timestamp}_{source.name}"
+        dest = media_dir / dest_name
+        shutil.copy2(source_path, dest)
+        staged_paths.append(f".media/{dest_name}")
+
+        # Type-specific processing (enrichment on top of the original)
         if media_type == MediaType.IMAGE:
-            # Copy image, resize if too large
-            resized = await self._resize_image(source_path)
-            dest_name = f"{timestamp}_{source.name}"
-            dest = media_dir / dest_name
-            shutil.copy2(resized, dest)
-            staged_paths.append(f".media/{dest_name}")
+            try:
+                resized = await self._resize_image(source_path)
+                if resized != source_path:
+                    # Replace the staged copy with the resized version
+                    shutil.copy2(resized, dest)
+            except Exception:
+                logger.debug("Image resize failed for %s, using original", source.name)
 
         elif media_type == MediaType.VIDEO:
-            # Stage original video file
-            dest_name = f"{timestamp}_{source.name}"
-            dest = media_dir / dest_name
-            shutil.copy2(source_path, dest)
-            staged_paths.append(f".media/{dest_name}")
-            # Also extract keyframes for visual context
-            frame_dir = self.temp_dir / f"frames_{timestamp}"
-            frame_dir.mkdir(exist_ok=True)
-            frames = await self._extract_video_frames(source_path, str(frame_dir))
-            for frame_path in frames:
-                frame_file = Path(frame_path)
-                fname = f"{timestamp}_{frame_file.name}"
-                fdest = media_dir / fname
-                shutil.copy2(frame_path, fdest)
-                staged_paths.append(f".media/{fname}")
+            # Extract keyframes for visual context
+            try:
+                frame_dir = self.temp_dir / f"frames_{timestamp}"
+                frame_dir.mkdir(exist_ok=True)
+                frames = await self._extract_video_frames(source_path, str(frame_dir))
+                for frame_path in frames:
+                    frame_file = Path(frame_path)
+                    fname = f"{timestamp}_{frame_file.name}"
+                    fdest = media_dir / fname
+                    shutil.copy2(frame_path, fdest)
+                    staged_paths.append(f".media/{fname}")
+            except Exception:
+                logger.debug("Video frame extraction failed for %s", source.name)
 
         elif media_type == MediaType.AUDIO:
-            # Transcribe or save as-is
-            transcript = await self._transcribe_audio(source_path, str(self.temp_dir))
-            if transcript:
-                # Save transcript as text file
-                txt_name = f"{timestamp}_transcript.txt"
-                txt_dest = media_dir / txt_name
-                txt_dest.write_text(transcript)
-                staged_paths.append(f".media/{txt_name}")
-            # Also save original audio
-            dest_name = f"{timestamp}_{source.name}"
-            dest = media_dir / dest_name
-            shutil.copy2(source_path, dest)
-            staged_paths.append(f".media/{dest_name}")
-
-        elif media_type == MediaType.DOCUMENT:
-            # Copy as-is
-            dest_name = f"{timestamp}_{source.name}"
-            dest = media_dir / dest_name
-            shutil.copy2(source_path, dest)
-            staged_paths.append(f".media/{dest_name}")
+            try:
+                transcript = await self._transcribe_audio(source_path, str(self.temp_dir))
+                if transcript:
+                    txt_name = f"{timestamp}_transcript.txt"
+                    txt_dest = media_dir / txt_name
+                    txt_dest.write_text(transcript)
+                    staged_paths.append(f".media/{txt_name}")
+            except Exception:
+                logger.debug("Audio transcription failed for %s", source.name)
 
         return staged_paths, media_type
 
@@ -251,7 +246,7 @@ class MediaHandler:
         paths_str = ", ".join(staged_paths)
 
         if media_type == MediaType.IMAGE:
-            return f"I've placed design mockups/images at: {paths_str}. Please analyze them."
+            return f"Image file at: {paths_str}."
         elif media_type == MediaType.VIDEO:
             video_files = [p for p in staged_paths if Path(p).suffix.lower() in VIDEO_EXTENSIONS]
             frame_files = [p for p in staged_paths if p not in video_files]
