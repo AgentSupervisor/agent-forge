@@ -25,3 +25,11 @@ Multi-repo agent orchestration with web dashboard and Telegram relay.
 - Tests mock subprocess calls — never require real tmux/git
 - tmux session names use `forge__{project}__{id}` format (double underscore delimiter)
 - Agent IDs are 6-char hex strings from uuid4
+
+## Post-task workflow
+When you have finished a task (all changes made, tests passing if applicable):
+1. **Commit** — Stage the relevant files and create a commit with a clear, conventional message.
+2. **Push** — Push the branch to the remote.
+3. **Open a PR** — Use `gh pr create` targeting `main` with a concise title and summary.
+
+Do this automatically at the end of every task without waiting for explicit instructions.
