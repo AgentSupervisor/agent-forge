@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 
-from .base import ActionButton, BaseConnector, ConnectorType, InboundMessage, OutboundMessage
+from .base import ActionButton, BaseConnector, ConnectorType, InboundMessage, OutboundMessage, extract_agent_from_text
 
 logger = logging.getLogger(__name__)
 
@@ -384,6 +384,12 @@ class WhatsAppConnector(BaseConnector):
         if project_name:
             match = re.match(r"^@[\w-]+(?::[\w-]+)?[:\s]\s*(.*)", text, re.DOTALL)
             text = match.group(1).strip() if match else text
+
+        # Extract agent_id from quoted (replied-to) bot message
+        if not agent_id:
+            quoted_text = data.get("quotedMessage", {}).get("text", "")
+            if quoted_text:
+                agent_id = extract_agent_from_text(quoted_text)
 
         msg = InboundMessage(
             connector_id=self.connector_id,

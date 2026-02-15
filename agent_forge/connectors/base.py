@@ -27,6 +27,21 @@ def ensure_extension(filename: str, content_type: str = "") -> str:
     return filename
 
 
+import re as _re
+
+_AGENT_ID_RE = _re.compile(r"`([0-9a-f]{6})`")
+
+
+def extract_agent_from_text(text: str) -> str:
+    """Extract a 6-char hex agent ID from backtick-wrapped pattern in bot message text.
+
+    Looks for patterns like `abc123` in status notifications and replies.
+    Returns the first match or empty string.
+    """
+    match = _AGENT_ID_RE.search(text)
+    return match.group(1) if match else ""
+
+
 class ConnectorType(str, Enum):
     TELEGRAM = "telegram"
     DISCORD = "discord"

@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .base import ActionButton, BaseConnector, ConnectorType, InboundMessage, OutboundMessage
+from .base import ActionButton, BaseConnector, ConnectorType, InboundMessage, OutboundMessage, extract_agent_from_text
 
 logger = logging.getLogger(__name__)
 
@@ -258,6 +258,10 @@ class TelegramConnector(BaseConnector):
             match = re.match(r"^@[\w-]+(?::[\w-]+)?[:\s]\s*(.*)", text, re.DOTALL)
             text = match.group(1).strip() if match else text
 
+        # Extract agent_id from replied-to bot message
+        if not agent_id:
+            agent_id = self._extract_reply_agent(update)
+
         msg = InboundMessage(
             connector_id=self.connector_id,
             channel_id=str(update.effective_chat.id),
@@ -283,6 +287,10 @@ class TelegramConnector(BaseConnector):
         if project_name:
             match = re.match(r"^@[\w-]+(?::[\w-]+)?[:\s]\s*(.*)", caption, re.DOTALL)
             caption = match.group(1).strip() if match else caption
+
+        # Extract agent_id from replied-to bot message
+        if not agent_id:
+            agent_id = self._extract_reply_agent(update)
 
         # Download attachment
         media_paths: list[str] = []
@@ -373,6 +381,21 @@ class TelegramConnector(BaseConnector):
             await self._message_callback(msg)
 
         await query.answer(f"{action} sent")
+
+    def _extract_reply_agent(self, update: Any) -> str:
+        """Extract agent_id from a replied-to bot message, if any."""
+        reply = getattr(update.message, "reply_to_message", None)
+        if not reply:
+            return ""
+        # Only consider replies to our own bot messages
+        if not self._bot or not reply.from_user:
+            return ""
+        bot_id = getattr(self._bot, "id", None) or getattr(self._bot, "bot", {})
+        if hasattr(bot_id, "id"):
+            bot_id = bot_id.id
+        if reply.from_user.id != bot_id:
+            return ""
+        return extract_agent_from_text(reply.text or reply.caption or "")
 
     @staticmethod
     def _parse_routing(text: str) -> tuple[str, str]:

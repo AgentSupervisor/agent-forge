@@ -202,18 +202,32 @@ class ConnectorManager:
             if len(bindings) == 1:
                 project_name = bindings[0][0]
             elif len(bindings) > 1:
-                # Multiple projects bound — need @project prefix
+                # Multiple projects bound — try @project prefix first
                 project_name, agent_id, text = self._parse_target(msg.text)
                 if project_name:
                     msg.text = text
                 else:
-                    projects = ", ".join(b[0] for b in bindings)
-                    await self._reply(
-                        msg,
-                        f"Multiple projects bound to this channel: {projects}\n"
-                        "Use @project message to specify.",
-                    )
-                    return
+                    # Fall back to sticky context (e.g. replying to an agent message)
+                    ctx_agent_id = self._get_context(msg.connector_id, msg.channel_id)
+                    if ctx_agent_id:
+                        agent = self.agent_manager.get_agent(ctx_agent_id)
+                        if agent:
+                            project_name = agent.project_name
+                            agent_id = ctx_agent_id
+                    # Also check if the connector extracted an agent_id (e.g. from a reply)
+                    if not project_name and msg.agent_id:
+                        agent = self.agent_manager.get_agent(msg.agent_id)
+                        if agent:
+                            project_name = agent.project_name
+                            agent_id = msg.agent_id
+                    if not project_name:
+                        projects = ", ".join(b[0] for b in bindings)
+                        await self._reply(
+                            msg,
+                            f"Multiple projects bound to this channel: {projects}\n"
+                            "Use @project message to specify.",
+                        )
+                        return
             else:
                 # No channel binding — try @project prefix
                 project_name, agent_id, text = self._parse_target(msg.text)
