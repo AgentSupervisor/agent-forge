@@ -39,6 +39,10 @@ class ConnectorManager:
         self._channel_map: dict[tuple[str, str], list[tuple[str, Any]]] = {}
         # Sticky context: (connector_id, channel_id) -> agent_id
         self._context: dict[tuple[str, str], str] = {}
+        # Reply channels: project_name -> set of (connector_id, channel_id)
+        # Tracks channels that sent messages to a project so notifications can reach them
+        # even without pre-configured channel bindings.
+        self._reply_channels: dict[str, set[tuple[str, str]]] = {}
 
     async def start(self) -> None:
         """Instantiate and start all enabled connectors from config."""
@@ -117,6 +121,18 @@ class ConnectorManager:
     def _set_context(self, connector_id: str, channel_id: str, agent_id: str) -> None:
         """Remember the last-interacted agent for a channel."""
         self._context[(connector_id, channel_id)] = agent_id
+
+    def _track_reply_channel(
+        self, connector_id: str, channel_id: str, project_name: str
+    ) -> None:
+        """Register a channel as a reply target for a project.
+
+        This ensures outbound notifications reach channels that sent messages
+        via @project prefix even if no channel binding is configured.
+        """
+        self._reply_channels.setdefault(project_name, set()).add(
+            (connector_id, channel_id)
+        )
 
     def _get_context(self, connector_id: str, channel_id: str) -> str:
         """Retrieve sticky agent context, clearing if the agent no longer exists."""
@@ -246,6 +262,7 @@ class ConnectorManager:
                 file_list = "\n".join(f"  - {p}" for p in staged)
                 await self._reply(msg, f"Staged to `{agent.id}` ({project_name}):\n{file_list}")
                 self._set_context(msg.connector_id, msg.channel_id, agent.id)
+                self._track_reply_channel(msg.connector_id, msg.channel_id, project_name)
             except Exception:
                 logger.exception("Failed to process media message")
                 await self._reply(msg, "Failed to process media attachment.")
@@ -254,6 +271,7 @@ class ConnectorManager:
             if success:
                 await self._reply(msg, f"Sent to `{agent.id}` ({project_name})")
                 self._set_context(msg.connector_id, msg.channel_id, agent.id)
+                self._track_reply_channel(msg.connector_id, msg.channel_id, project_name)
             else:
                 await self._reply(msg, f"Failed to send message to `{agent.id}`.")
 
@@ -356,6 +374,7 @@ class ConnectorManager:
                     reply += f"\nTask: {task}"
                 await self._reply(msg, reply)
                 self._set_context(msg.connector_id, msg.channel_id, agent.id)
+                self._track_reply_channel(msg.connector_id, msg.channel_id, project_name)
             except RuntimeError as exc:
                 await self._reply(msg, f"Failed to spawn agent: {exc}")
 
@@ -421,6 +440,7 @@ class ConnectorManager:
 
     async def send_to_project_channels(self, project_name: str, text: str) -> None:
         """Send a message to all outbound channels bound to a project."""
+        sent: set[tuple[str, str]] = set()
         for proj_name, project_cfg in self.config.projects.items():
             if proj_name != project_name:
                 continue
@@ -433,12 +453,30 @@ class ConnectorManager:
                 out = OutboundMessage(channel_id=binding.channel_id, text=text)
                 try:
                     await connector.send_message(out)
+                    sent.add((binding.connector_id, binding.channel_id))
                 except Exception:
                     logger.debug(
                         "Failed to send outbound to %s/%s",
                         binding.connector_id,
                         binding.channel_id,
                     )
+
+        # Also send to reply channels that interacted via @project prefix
+        for connector_id, channel_id in self._reply_channels.get(project_name, set()):
+            if (connector_id, channel_id) in sent:
+                continue
+            connector = self.connectors.get(connector_id)
+            if not connector:
+                continue
+            out = OutboundMessage(channel_id=channel_id, text=text)
+            try:
+                await connector.send_message(out)
+            except Exception:
+                logger.debug(
+                    "Failed to send to reply channel %s/%s",
+                    connector_id,
+                    channel_id,
+                )
 
     async def send_to_project_channels_rich(
         self,
@@ -447,6 +485,7 @@ class ConnectorManager:
         extra: dict[str, Any] | None = None,
     ) -> None:
         """Send a message with extra metadata (e.g. action buttons) to all outbound channels."""
+        sent: set[tuple[str, str]] = set()
         for proj_name, project_cfg in self.config.projects.items():
             if proj_name != project_name:
                 continue
@@ -463,12 +502,34 @@ class ConnectorManager:
                 )
                 try:
                     await connector.send_message(out)
+                    sent.add((binding.connector_id, binding.channel_id))
                 except Exception:
                     logger.debug(
                         "Failed to send rich outbound to %s/%s",
                         binding.connector_id,
                         binding.channel_id,
                     )
+
+        # Also send to reply channels that interacted via @project prefix
+        for connector_id, channel_id in self._reply_channels.get(project_name, set()):
+            if (connector_id, channel_id) in sent:
+                continue
+            connector = self.connectors.get(connector_id)
+            if not connector:
+                continue
+            out = OutboundMessage(
+                channel_id=channel_id,
+                text=text,
+                extra=extra or {},
+            )
+            try:
+                await connector.send_message(out)
+            except Exception:
+                logger.debug(
+                    "Failed to send rich to reply channel %s/%s",
+                    connector_id,
+                    channel_id,
+                )
 
     async def restart_connector(self, connector_id: str) -> bool:
         """Stop and restart a single connector from current config."""

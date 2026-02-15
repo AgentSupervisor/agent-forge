@@ -42,6 +42,14 @@ class AgentProfile(BaseModel):
     start_sequence: list[StartSequenceStep] = []
 
 
+class SummaryConfig(BaseModel):
+    enabled: bool = False
+    api_key: str = ""
+    model: str = "claude-haiku-4-5-20251001"
+    max_tokens: int = 300
+    timeout_seconds: float = 10.0
+
+
 class DefaultsConfig(BaseModel):
     max_agents_per_project: int = 5
     sandbox: bool = True
@@ -49,6 +57,7 @@ class DefaultsConfig(BaseModel):
     claude_env: dict[str, str] = {}
     poll_interval_seconds: float = 3.0
     agent_instructions: str = ""
+    summary: SummaryConfig = SummaryConfig()
 
 
 class SandboxConfig(BaseModel):
@@ -110,4 +119,15 @@ class ForgeConfig(BaseModel):
         return (
             os.environ.get("AGENT_FORGE_TELEGRAM_TOKEN")
             or self.telegram.bot_token
+        )
+
+    def get_summary_api_key(self) -> str:
+        """Get Anthropic API key for activity summarization.
+
+        Resolution order: AGENT_FORGE_ANTHROPIC_API_KEY > ANTHROPIC_API_KEY > config value.
+        """
+        return (
+            os.environ.get("AGENT_FORGE_ANTHROPIC_API_KEY")
+            or os.environ.get("ANTHROPIC_API_KEY")
+            or self.defaults.summary.api_key
         )

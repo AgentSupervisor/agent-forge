@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import shutil
 import subprocess
 import uuid
 from dataclasses import dataclass, field
@@ -311,6 +312,11 @@ class AgentManager:
 
         # Create .media/ directory in the worktree
         (worktree_dir / ".media").mkdir(parents=True, exist_ok=True)
+
+        # Copy .env files from project directory (they're gitignored so not in worktrees)
+        for env_file in project_path.glob(".env*"):
+            if env_file.is_file():
+                shutil.copy2(str(env_file), str(worktree_dir / env_file.name))
 
         # Install Claude Code hooks for sub-agent tracking
         self._install_hooks(worktree_dir, short_id)

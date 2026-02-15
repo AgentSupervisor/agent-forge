@@ -10,8 +10,10 @@ import aiosqlite
 
 from . import tmux_utils
 from .agent_manager import AgentManager, AgentStatus
+from .config import ForgeConfig
 from .connectors.base import ActionButton
 from .database import log_event, save_snapshot
+from .summarizer import summarize_output
 from .websocket_manager import WebSocketManager
 
 logger = logging.getLogger(__name__)
@@ -51,12 +53,14 @@ class StatusMonitor:
         db: aiosqlite.Connection | None = None,
         poll_interval: float = 3.0,
         connector_manager: object | None = None,
+        config: ForgeConfig | None = None,
     ) -> None:
         self.agent_manager = agent_manager
         self.ws_manager = ws_manager
         self.db = db
         self.poll_interval = poll_interval
         self.connector_manager = connector_manager
+        self.config = config
         self._running = False
         self._task: asyncio.Task | None = None
 
@@ -103,7 +107,7 @@ class StatusMonitor:
                         "status_change", {"status": AgentStatus.STOPPED.value},
                     )
                     msg = f"Agent `{agent.id}` ({agent.project_name}) stopped"
-                    summary = self.extract_activity_summary(
+                    summary = await self._get_activity_summary(
                         agent.last_output or "",
                     )
                     if summary:
@@ -123,9 +127,9 @@ class StatusMonitor:
                         await self._notify_waiting_input(
                             agent.id, agent.project_name, output,
                         )
-                    else:
+                    elif new_status != AgentStatus.WORKING:
                         msg = f"Agent `{agent.id}` ({agent.project_name}): {old_status.value} -> {new_status.value}"
-                        summary = self.extract_activity_summary(output)
+                        summary = await self._get_activity_summary(output)
                         if summary:
                             msg += f"\n```\n{summary}\n```"
                         await self._notify_channels(agent.project_name, msg)
@@ -181,6 +185,23 @@ class StatusMonitor:
             )
         except Exception:
             logger.debug("Failed to send rich notification for %s", project_name)
+
+    async def _get_activity_summary(self, output: str) -> str:
+        """Get an activity summary, using LLM if configured, else regex fallback."""
+        if self.config:
+            summary_cfg = self.config.defaults.summary
+            api_key = self.config.get_summary_api_key()
+            if summary_cfg.enabled and api_key:
+                result = await summarize_output(
+                    output,
+                    api_key=api_key,
+                    model=summary_cfg.model,
+                    max_tokens=summary_cfg.max_tokens,
+                    timeout=summary_cfg.timeout_seconds,
+                )
+                if result:
+                    return result
+        return self.extract_activity_summary(output)
 
     @staticmethod
     def extract_prompt_text(output: str) -> str:
@@ -239,22 +260,26 @@ class StatusMonitor:
         if not lines:
             return ""
 
-        # Take last ~20 non-empty lines
-        tail = lines[-20:]
+        # Take last ~40 non-empty lines
+        tail = lines[-40:]
 
         # Filter out prompt lines, spinner artifacts, separators, and UI chrome
         noise_re = re.compile(
-            r"^\s*[>❯$#]\s*$"       # bare prompt chars
-            r"|^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷|/\-\\]"  # spinners
-            r"|^[\s─━─\-=~_*]{6,}$"  # separator lines (─────, ------, ======, etc.)
-            r"|^\s*⏵"               # Claude Code UI chrome
+            r"^\s*[>❯$#]\s*$"                  # bare prompt chars
+            r"|^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]"  # Unicode spinners
+            r"|^\s*[|/\-\\]\s\S.{0,30}$"       # ASCII spinners (short lines only)
+            r"|^[\s─━─=~_*]{6,}$"              # separator lines
+            r"|^[\s\-]{6,}$"                    # dash-only separator lines
+            r"|^\s*⏵"                           # Claude Code UI chrome (bypass toggle)
+            r"|^\s*[❯>]\s+\S"                  # Claude Code tool invocations (❯ command)
+            r"|^\s*✻"                           # Claude Code thinking/churning indicator
         )
         meaningful = [ln for ln in tail if not noise_re.match(ln)]
         if not meaningful:
             return ""
 
-        # Last 5 meaningful lines, truncated
-        summary_lines = [ln[:120] for ln in meaningful[-5:]]
+        # Last 15 meaningful lines, truncated
+        summary_lines = [ln[:120] for ln in meaningful[-15:]]
         return "\n".join(summary_lines)
 
     @staticmethod
