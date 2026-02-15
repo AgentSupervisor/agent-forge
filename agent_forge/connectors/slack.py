@@ -233,7 +233,7 @@ class SlackConnector(BaseConnector):
         if not is_command:
             project_name, agent_id = self._parse_routing(text)
             if project_name:
-                match = re.match(r"^@[\w-]+(?::[\w-]+)?\s+(.*)", text, re.DOTALL)
+                match = re.match(r"^@[\w-]+(?::[\w-]+)?[:\s]\s*(.*)", text, re.DOTALL)
                 text = match.group(1).strip() if match else text
 
         # Handle file attachments
@@ -275,7 +275,7 @@ class SlackConnector(BaseConnector):
         # Parse routing from remaining text
         project_name, agent_id = self._parse_routing(text)
         if project_name:
-            match = re.match(r"^@[\w-]+(?::[\w-]+)?\s+(.*)", text, re.DOTALL)
+            match = re.match(r"^@[\w-]+(?::[\w-]+)?[:\s]\s*(.*)", text, re.DOTALL)
             text = match.group(1).strip() if match else text
 
         media_paths = await self._download_files(event.get("files", []))
@@ -363,7 +363,7 @@ class SlackConnector(BaseConnector):
     @staticmethod
     def _parse_routing(text: str) -> tuple[str, str]:
         """Extract @project[:agent_id] from text. Returns (project, agent_id)."""
-        match = re.match(r"^@([\w-]+)(?::([\w-]+))?\s", text)
+        match = re.match(r"^@([\w-]+)(?::([\w-]+))?[:\s]", text)
         if not match:
             return "", ""
         return match.group(1), match.group(2) or ""
