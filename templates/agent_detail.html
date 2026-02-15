@@ -1,0 +1,300 @@
+{% extends "base.html" %}
+{% block title %}Agent {{ agent.id }} - Agent Forge{% endblock %}
+
+{% block content %}
+<div x-data="agentDetail()" x-init="init()" style="display:flex; height:100vh;">
+
+    <!-- Left: terminal + input bar -->
+    <div style="flex:1; display:flex; flex-direction:column; min-width:0;">
+
+        <!-- Header bar -->
+        <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 20px; border-bottom:1px solid var(--border); background:var(--bg-surface); flex-shrink:0;">
+            <div style="display:flex; align-items:center; gap:12px;">
+                <a href="/" style="color:var(--text-muted); text-decoration:none; font-size:13px;">&larr; Dashboard</a>
+                <div style="width:1px; height:20px; background:var(--border);"></div>
+                <span class="pulse-dot {{ agent.status.value }}" id="detail-status-dot"></span>
+                <span style="font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:600;">{{ agent.id }}</span>
+                <span class="status-badge {{ agent.status.value }}" id="detail-status-badge">{{ agent.status.value | replace('_', ' ') }}</span>
+                <span style="font-size:12px; color:var(--text-muted);">{{ agent.project_name }}</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:12px; font-size:12px; color:var(--text-muted);">
+                <span id="detail-uptime-val"></span>
+                <span style="font-family:monospace;" title="{{ agent.branch_name }}">{{ agent.branch_name }}</span>
+                <button class="btn btn-ghost btn-xs" onclick="refreshTerminal()">Refresh</button>
+            </div>
+        </div>
+
+        <!-- Terminal output -->
+        <div id="terminal-view"
+             class="terminal-container"
+             style="flex:1; border-radius:0;">{{ terminal_output }}</div>
+
+        <!-- Message input bar (below terminal, like a prompt) -->
+        <div style="display:flex; align-items:center; gap:10px; padding:10px 16px; border-top:1px solid var(--border); background:var(--bg-surface); flex-shrink:0;">
+            <span style="color:var(--text-muted); font-family:'JetBrains Mono',monospace; font-size:13px; flex-shrink:0;">&#10095;</span>
+            <input type="text" x-model="messageText" placeholder="Send a message to the agent..."
+                   class="input" style="flex:1; background:var(--bg-input); border-radius:6px; padding:8px 12px; font-size:13px;"
+                   @keydown.enter="sendMessage()"
+                   @keydown.ctrl.enter="sendMessage()"
+                   @keydown.meta.enter="sendMessage()">
+            <button class="btn btn-primary btn-sm" @click="sendMessage()" :disabled="sending"
+                    style="flex-shrink:0;">
+                <span x-show="!sending">Send</span>
+                <span x-show="sending">...</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Right panel -->
+    <div class="detail-panel" style="width:320px; flex-shrink:0; display:flex; flex-direction:column;">
+
+        <!-- Quick controls -->
+        <div class="detail-section">
+            <h3>Quick Controls</h3>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px;">
+                <button class="btn btn-success btn-sm" onclick="sendControl('approve')">Approve</button>
+                <button class="btn btn-success btn-sm" style="background:rgba(16,185,129,0.2);" onclick="sendControl('approve_all')">Always</button>
+                <button class="btn btn-warning btn-sm" onclick="sendControl('reject')">Reject</button>
+                <button class="btn btn-danger btn-sm" onclick="sendControl('interrupt')">Ctrl+C</button>
+            </div>
+            <div style="display:flex; gap:6px;">
+                <button class="btn btn-ghost btn-xs" style="flex:1;" onclick="sendControl('up')">&#9650; Up</button>
+                <button class="btn btn-ghost btn-xs" style="flex:1;" onclick="sendControl('down')">&#9660; Down</button>
+            </div>
+        </div>
+
+        <!-- Agent info -->
+        <div class="detail-section">
+            <h3>Agent Info</h3>
+            <div style="display:flex; flex-direction:column; gap:8px; font-size:12px;">
+                <div style="display:flex; justify-content:space-between;">
+                    <span style="color:var(--text-muted);">ID</span>
+                    <span style="font-family:monospace;">{{ agent.id }}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between;">
+                    <span style="color:var(--text-muted);">Session</span>
+                    <span style="font-family:monospace; font-size:11px;">{{ agent.session_name }}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between;">
+                    <span style="color:var(--text-muted);">Sub-agents</span>
+                    <span id="detail-sub-count">{{ agent.sub_agent_count }}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between;">
+                    <span style="color:var(--text-muted);">Created</span>
+                    <span style="font-size:11px;">{{ agent.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                </div>
+                {% if agent.task_description %}
+                <div>
+                    <span style="color:var(--text-muted); display:block; margin-bottom:4px;">Task</span>
+                    <div style="background:var(--bg-card); border-radius:6px; padding:8px; font-size:12px; color:var(--text-secondary); line-height:1.5;">{{ agent.task_description }}</div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Event log -->
+        <div class="detail-section" style="flex:1; display:flex; flex-direction:column; min-height:0;">
+            <h3>Event Log</h3>
+            <div id="event-log" style="flex:1; overflow-y:auto; font-size:11px; display:flex; flex-direction:column; gap:4px;">
+                <span style="color:var(--text-muted);">Loading...</span>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div style="padding:16px 20px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:6px;">
+            <button class="btn btn-sm" style="width:100%; background:rgba(59,130,246,0.15); color:#60a5fa; border:1px solid rgba(59,130,246,0.3);"
+                    onclick="restartAgent()" title="Ctrl+Shift+R">
+                &#8635; Restart Agent
+            </button>
+            <button class="btn btn-danger btn-sm" style="width:100%;" onclick="killAgentDetail()">Kill Agent</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const AGENT_ID = '{{ agent.id }}';
+
+// Shared AnsiUp instance for ANSI-to-HTML conversion
+window._ansiUp = new AnsiUp();
+window._ansiUp.use_classes = false;
+window._ansiUp.escape_for_html = true;
+
+// Render initial terminal output through AnsiUp
+(function () {
+    var el = document.getElementById('terminal-view');
+    if (el && el.textContent) {
+        el.innerHTML = window._ansiUp.ansi_to_html(el.textContent);
+    }
+})();
+
+function agentDetail() {
+    return {
+        messageText: '',
+        sending: false,
+
+        init() {
+            loadEvents();
+            computeUptime();
+            setInterval(computeUptime, 10000);
+            window.currentAgentId = AGENT_ID;
+
+            // Auto-focus message input
+            this.$nextTick(() => {
+                const input = document.querySelector('input[x-model="messageText"]');
+                if (input) input.focus();
+            });
+
+            // Ctrl+C shortcut: send interrupt to agent terminal
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'c' && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
+                    // Allow normal copy if text is selected
+                    if (window.getSelection().toString()) return;
+                    e.preventDefault();
+                    sendControl('interrupt');
+                }
+                // Ctrl+Shift+R: restart agent (Ctrl+R alone is browser refresh)
+                if (e.key === 'R' && e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
+                    e.preventDefault();
+                    restartAgent();
+                }
+            });
+        },
+
+        async sendMessage() {
+            const text = this.messageText.trim();
+            if (!text || this.sending) return;
+            this.sending = true;
+            try {
+                const res = await fetch('/api/agents/' + AGENT_ID + '/message', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text }),
+                });
+                if (res.ok) {
+                    this.messageText = '';
+                    showToast('Message sent');
+                    setTimeout(refreshTerminal, 2000);
+                    loadEvents();
+                } else {
+                    const detail = await res.json().then(d => d.detail || 'Failed to send').catch(() => res.statusText);
+                    showToast(detail, true);
+                }
+            } catch (e) {
+                showToast('Error: ' + e.message, true);
+            } finally {
+                this.sending = false;
+            }
+        }
+    }
+}
+
+function computeUptime() {
+    const created = new Date('{{ agent.created_at.isoformat() }}');
+    const diff = Date.now() - created.getTime();
+    const mins = Math.floor(diff / 60000);
+    let text;
+    if (mins < 60) text = mins + 'm';
+    else {
+        const hours = Math.floor(mins / 60);
+        if (hours < 24) text = hours + 'h ' + (mins % 60) + 'm';
+        else {
+            const days = Math.floor(hours / 24);
+            text = days + 'd ' + (hours % 24) + 'h';
+        }
+    }
+    const el = document.getElementById('detail-uptime-val');
+    if (el) el.textContent = text;
+}
+
+async function refreshTerminal() {
+    try {
+        const res = await fetch('/api/agents/' + AGENT_ID + '/terminal');
+        if (res.ok) {
+            const data = await res.json();
+            const el = document.getElementById('terminal-view');
+            if (window._ansiUp) {
+                el.innerHTML = window._ansiUp.ansi_to_html(data.output);
+            } else {
+                el.textContent = data.output;
+            }
+            el.scrollTop = el.scrollHeight;
+        }
+    } catch (e) { /* silent */ }
+}
+
+async function loadEvents() {
+    try {
+        const res = await fetch('/api/agents/' + AGENT_ID + '/events?limit=50');
+        if (res.ok) {
+            const events = await res.json();
+            const container = document.getElementById('event-log');
+            if (events.length === 0) {
+                container.innerHTML = '<span style="color:var(--text-muted);">No events yet.</span>';
+                return;
+            }
+            container.innerHTML = events.map(e =>
+                `<div style="display:flex; gap:8px; padding:3px 0; border-bottom:1px solid rgba(255,255,255,0.03);">
+                    <span style="color:var(--text-muted); white-space:nowrap; font-size:10px;">${e.timestamp || ''}</span>
+                    <span style="color:var(--accent);">${e.event_type}</span>
+                </div>`
+            ).join('');
+        }
+    } catch (e) { /* silent */ }
+}
+
+async function sendControl(action) {
+    try {
+        const res = await fetch('/api/agents/' + AGENT_ID + '/control', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action }),
+        });
+        if (res.ok) {
+            showToast('Sent: ' + action);
+            setTimeout(refreshTerminal, 1500);
+            loadEvents();
+        } else {
+            const detail = await res.json().then(d => d.detail || 'Failed').catch(() => res.statusText);
+            showToast(detail, true);
+        }
+    } catch (e) {
+        showToast('Error: ' + e.message, true);
+    }
+}
+
+async function restartAgent() {
+    if (!confirm('Restart agent ' + AGENT_ID + '? This will kill it and spawn a new one with the same task.')) return;
+    try {
+        const res = await fetch('/api/agents/' + AGENT_ID + '/restart', { method: 'POST' });
+        if (res.ok) {
+            const data = await res.json();
+            showToast('Restarted. Redirecting to new agent...');
+            setTimeout(() => window.location.href = '/agents/' + data.new_id, 1000);
+        } else {
+            const detail = await res.json().then(d => d.detail || 'Failed to restart').catch(() => res.statusText);
+            showToast(detail, true);
+        }
+    } catch (e) {
+        showToast('Error: ' + e.message, true);
+    }
+}
+
+async function killAgentDetail() {
+    if (!confirm('Kill agent ' + AGENT_ID + '?')) return;
+    try {
+        const res = await fetch('/api/agents/' + AGENT_ID, { method: 'DELETE' });
+        if (res.ok) {
+            showToast('Agent killed. Redirecting...');
+            setTimeout(() => window.location.href = '/', 1000);
+        } else {
+            const detail = await res.json().then(d => d.detail || 'Failed to kill').catch(() => res.statusText);
+            showToast(detail, true);
+        }
+    } catch (e) {
+        showToast('Error: ' + e.message, true);
+    }
+}
+</script>
+{% endblock %}

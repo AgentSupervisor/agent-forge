@@ -1,0 +1,15 @@
+<div class="bg-gray-800 rounded-lg border border-gray-700 p-5 hover:border-gray-600 transition">
+    <div class="flex items-start justify-between mb-2">
+        <h3 class="text-base font-semibold text-white">{{ name }}</h3>
+        <span class="inline-flex items-center rounded-full bg-gray-700 px-2 py-0.5 text-xs font-medium text-gray-300"
+              id="project-count-{{ name }}">
+            {{ agent_count }} agent{{ 's' if agent_count != 1 else '' }}
+        </span>
+    </div>
+    <p class="text-sm text-gray-400 mb-1">{{ project.description or 'No description' }}</p>
+    <p class="text-xs text-gray-500 font-mono mb-4 truncate" title="{{ project.path }}">{{ project.path }}</p>
+    <button onclick="document.querySelector('[x-data]').__x.$data.openSpawnModal('{{ name }}')"
+            class="w-full text-sm px-3 py-2 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition">
+        Spawn Agent
+    </button>
+</div>

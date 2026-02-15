@@ -1,0 +1,58 @@
+<tr id="agent-row-{{ agent.id }}" class="hover:bg-gray-800/50">
+    <td class="px-4 py-3">
+        <span class="inline-block h-2.5 w-2.5 rounded-full
+            {% if agent.status.value == 'working' %}bg-green-500
+            {% elif agent.status.value == 'waiting_input' %}bg-yellow-500
+            {% elif agent.status.value == 'idle' %}bg-gray-400
+            {% elif agent.status.value == 'error' %}bg-red-500
+            {% elif agent.status.value == 'stopped' %}bg-gray-600
+            {% else %}bg-blue-500{% endif %}"
+              id="status-dot-{{ agent.id }}" title="{{ agent.status.value }}"></span>
+    </td>
+    <td class="px-4 py-3">
+        <a href="/agent/{{ agent.id }}" class="text-indigo-400 hover:text-indigo-300 text-sm font-mono">{{ agent.id }}</a>
+    </td>
+    <td class="px-4 py-3 text-sm text-gray-300">{{ agent.project_name }}</td>
+    <td class="px-4 py-3 text-sm text-gray-400 font-mono truncate max-w-[160px]" title="{{ agent.branch_name }}">{{ agent.branch_name }}</td>
+    <td class="px-4 py-3 text-sm text-gray-300 truncate max-w-[200px]" title="{{ agent.task_description }}">{{ agent.task_description or '-' }}</td>
+    <td class="px-4 py-3 text-sm text-gray-400" id="uptime-{{ agent.id }}"></td>
+    <td class="px-4 py-3 text-sm text-gray-400" id="activity-{{ agent.id }}"></td>
+    <td class="px-4 py-3 text-right">
+        <button onclick="killAgent('{{ agent.id }}')"
+                class="text-xs px-2 py-1 rounded bg-red-600/20 hover:bg-red-600/40 text-red-400 transition">
+            Kill
+        </button>
+    </td>
+</tr>
+<script>
+(function() {
+    const created = new Date('{{ agent.created_at.isoformat() }}');
+    const activity = new Date('{{ agent.last_activity.isoformat() }}');
+    function update() {
+        const uptimeEl = document.getElementById('uptime-{{ agent.id }}');
+        const actEl = document.getElementById('activity-{{ agent.id }}');
+        if (uptimeEl) {
+            const diff = Date.now() - created.getTime();
+            const mins = Math.floor(diff / 60000);
+            if (mins < 60) uptimeEl.textContent = mins + 'm';
+            else {
+                const h = Math.floor(mins / 60);
+                if (h < 24) uptimeEl.textContent = h + 'h ' + (mins % 60) + 'm';
+                else uptimeEl.textContent = Math.floor(h / 24) + 'd ' + (h % 24) + 'h';
+            }
+        }
+        if (actEl) {
+            const diff2 = Date.now() - activity.getTime();
+            const secs = Math.floor(diff2 / 1000);
+            if (secs < 60) actEl.textContent = secs + 's ago';
+            else {
+                const m = Math.floor(secs / 60);
+                if (m < 60) actEl.textContent = m + 'm ago';
+                else actEl.textContent = Math.floor(m / 60) + 'h ago';
+            }
+        }
+    }
+    update();
+    setInterval(update, 10000);
+})();
+</script>

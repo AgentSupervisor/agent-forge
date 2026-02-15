@@ -1,0 +1,513 @@
+{% extends "base.html" %}
+{% block title %}{{ project_name }} - Agent Forge{% endblock %}
+{% block nav_config %}active{% endblock %}
+
+{% block content %}
+<div x-data="projectSettings()" x-init="init()">
+
+    <!-- Header bar -->
+    <div class="stats-bar">
+        <div class="stat-item">
+            <a href="/config" style="color:var(--text-muted); text-decoration:none; font-size:13px;">&larr; Projects</a>
+        </div>
+        <div style="width:1px; height:24px; background:var(--border); margin:0 4px;"></div>
+        <div class="stat-item">
+            <span class="stat-value">{{ project_name }}</span>
+        </div>
+        <div class="stat-item">
+            <span class="status-badge starting" style="font-size:11px;">max {{ max_agents }}</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-value">{{ agents | length }}</span>
+            <span>Active agents</span>
+        </div>
+        <div style="flex:1;"></div>
+        <button class="btn btn-primary btn-sm" @click="saveProject()" :disabled="saving">
+            <span x-show="!saving">Save Changes</span>
+            <span x-show="saving">Saving...</span>
+        </button>
+    </div>
+
+    <!-- Content -->
+    <div style="padding: 24px; max-width: 900px;">
+
+        <!-- General Settings -->
+        <div style="margin-bottom:32px;">
+            <h2 style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); margin-bottom:12px;">General</h2>
+            <div class="agent-card" style="cursor:default;">
+                <div style="display:flex; flex-direction:column; gap:16px;">
+
+                    <!-- Name (read-only) -->
+                    <div class="detail-section" style="padding:0; border-bottom:none;">
+                        <h3>Project Name</h3>
+                        <div style="font-family:'JetBrains Mono',monospace; font-size:13px; color:var(--text-secondary); padding:8px 12px; background:var(--bg-input); border:1px solid var(--border); border-radius:8px; opacity:0.6;">{{ project_name }}</div>
+                    </div>
+
+                    <!-- Path -->
+                    <div class="detail-section" style="padding:0; border-bottom:none;">
+                        <h3>Path</h3>
+                        <input type="text" class="input" x-model="form.path"
+                               style="font-family:'JetBrains Mono',monospace; font-size:12px;"
+                               placeholder="/home/user/projects/my-project">
+                    </div>
+
+                    <!-- Default Branch -->
+                    <div class="detail-section" style="padding:0; border-bottom:none;">
+                        <h3>Default Branch</h3>
+                        <input type="text" class="input" x-model="form.default_branch"
+                               style="max-width:240px;" placeholder="main">
+                    </div>
+
+                    <!-- Description -->
+                    <div class="detail-section" style="padding:0; border-bottom:none;">
+                        <h3>Description</h3>
+                        <textarea class="textarea" rows="2" x-model="form.description"
+                                  placeholder="Optional description" style="resize:vertical;"></textarea>
+                    </div>
+
+                    <!-- Max Agents -->
+                    <div class="detail-section" style="padding:0; border-bottom:none;">
+                        <h3>Max Agents</h3>
+                        <input type="number" class="input" x-model.number="form.max_agents"
+                               min="1" max="20" style="max-width:120px;">
+                    </div>
+
+                    <!-- Agent Instructions -->
+                    <div class="detail-section" style="padding:0; border-bottom:none;">
+                        <h3>Agent Instructions</h3>
+                        <p style="font-size:11px; color:var(--text-muted); margin:0 0 8px;">Project-specific instructions injected into agent CLAUDE.md</p>
+                        <textarea class="textarea" rows="6" x-model="form.agent_instructions"
+                                  placeholder="Project-specific instructions for agents..."
+                                  style="font-family:'JetBrains Mono',monospace; font-size:12px; line-height:1.6; resize:vertical;"></textarea>
+                    </div>
+
+                    <!-- Context Files -->
+                    <div class="detail-section" style="padding:0; border-bottom:none;">
+                        <h3>Context Files</h3>
+                        <p style="font-size:11px; color:var(--text-muted); margin:0 0 8px;">Files copied into the agent worktree as additional context</p>
+                        <div style="display:flex; flex-direction:column; gap:6px;">
+                            <template x-for="(file, idx) in form.context_files" :key="idx">
+                                <div style="display:flex; gap:6px; align-items:center;">
+                                    <input type="text"
+                                           x-model="form.context_files[idx]"
+                                           class="input"
+                                           placeholder="/path/to/context-file.md"
+                                           style="flex:1; font-family:'JetBrains Mono',monospace; font-size:12px;">
+                                    <button class="btn btn-ghost btn-xs"
+                                            @click="form.context_files.splice(idx, 1)"
+                                            title="Remove"
+                                            style="flex-shrink:0; color:var(--status-error); padding:4px 8px;">
+                                        &#10005;
+                                    </button>
+                                </div>
+                            </template>
+                            <button class="btn btn-ghost btn-xs"
+                                    @click="form.context_files.push('')"
+                                    style="align-self:flex-start; margin-top:4px;">
+                                + Add File
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Channel Bindings -->
+        <div style="margin-bottom:32px;">
+            <h2 style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); margin-bottom:12px;">Channel Bindings</h2>
+            <div class="agent-card" style="cursor:default;">
+
+                <!-- Existing bindings -->
+                <template x-if="channels.length === 0">
+                    <div style="color:var(--text-muted); font-size:13px; padding:8px 0 16px;">
+                        No channel bindings. Messages to this project require the <span style="font-family:monospace;">@{{ project_name }}</span> prefix.
+                    </div>
+                </template>
+
+                <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:16px;">
+                    <template x-for="(ch, idx) in channels" :key="idx">
+                        <div style="display:flex; align-items:center; gap:12px; padding:12px 16px; background:var(--bg-input); border:1px solid var(--border); border-radius:8px;">
+                            <!-- Connector badge -->
+                            <span class="status-badge working" style="font-size:11px; flex-shrink:0;" x-text="ch.connector_id"></span>
+
+                            <!-- Channel info -->
+                            <div style="flex:1; min-width:0;">
+                                <div style="font-size:13px; font-weight:500;" x-text="ch.channel_name || ch.channel_id"></div>
+                                <div style="font-size:11px; color:var(--text-muted); font-family:monospace;" x-show="ch.channel_name" x-text="'ID: ' + ch.channel_id"></div>
+                            </div>
+
+                            <!-- Direction badges -->
+                            <div style="display:flex; gap:4px; flex-shrink:0;">
+                                <span x-show="ch.inbound" style="font-size:10px; padding:2px 6px; border-radius:4px; background:rgba(59,130,246,0.12); color:#60a5fa;">IN</span>
+                                <span x-show="ch.outbound" style="font-size:10px; padding:2px 6px; border-radius:4px; background:rgba(16,185,129,0.12); color:#34d399;">OUT</span>
+                            </div>
+
+                            <!-- Remove button -->
+                            <button class="btn btn-ghost btn-xs" @click="removeChannel(idx)"
+                                    style="color:var(--status-error); flex-shrink:0;">Remove</button>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- Add binding form (only if connectors exist) -->
+                <template x-if="Object.keys(connectorOptions).length > 0">
+                    <div style="padding-top:16px; border-top:1px solid var(--border);">
+                        <div style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); margin-bottom:10px;">Add Channel</div>
+                        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:10px;">
+                            <div>
+                                <label style="display:block; font-size:11px; color:var(--text-muted); margin-bottom:4px;">Connector</label>
+                                <select class="input" x-model="channelForm.connector_id" @change="onConnectorChanged()" style="font-size:12px;">
+                                    <option value="">Select connector...</option>
+                                    <template x-for="(conn, connId) in connectorOptions" :key="connId">
+                                        <option :value="connId" x-text="connId + ' (' + conn.type + ')'"></option>
+                                    </template>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="display:block; font-size:11px; color:var(--text-muted); margin-bottom:4px;">Channel</label>
+                                <!-- Dropdown mode -->
+                                <div :style="channelManualEntry ? 'display:none' : 'display:flex; gap:6px; align-items:center;'">
+                                    <select class="input" x-model="channelForm.channel_id"
+                                            @change="onChannelSelected()"
+                                            style="flex:1; font-family:monospace; font-size:12px; min-width:0;">
+                                        <option value="">Select channel...</option>
+                                        <template x-for="ch in discoveredChannels" :key="ch.id">
+                                            <option :value="ch.id" x-text="ch.name + ' (' + ch.id + ')'"></option>
+                                        </template>
+                                        <option value="__manual__">Enter ID manually...</option>
+                                    </select>
+                                    <button class="btn btn-ghost btn-xs" @click="fetchChannels()" title="Refresh channels"
+                                            style="flex-shrink:0; padding:4px 8px; font-size:13px;">&#8635;</button>
+                                </div>
+                                <!-- Manual input mode -->
+                                <div x-show="channelManualEntry">
+                                    <div style="display:flex; gap:6px;">
+                                        <input class="input" type="text" x-model="channelForm.channel_id"
+                                               placeholder="-1001234567890" style="flex:1; font-family:monospace; font-size:12px;">
+                                        <button class="btn btn-ghost btn-xs" @click="validateChannel()"
+                                                :disabled="!channelForm.channel_id || !channelForm.connector_id || channelValidating"
+                                                style="flex-shrink:0;">
+                                            <span x-text="channelValidating ? '...' : 'Check'"></span>
+                                        </button>
+                                    </div>
+                                    <div style="display:flex; align-items:center; gap:8px; margin-top:3px;">
+                                        <span x-show="channelValidatedName" style="font-size:11px; color:var(--status-working);" x-text="channelValidatedName"></span>
+                                        <button @click="channelManualEntry = false; channelForm.channel_id = ''; channelForm.channel_name = ''; channelValidatedName = '';"
+                                                style="font-size:10px; color:var(--text-muted); background:none; border:none; cursor:pointer; padding:2px 0; text-decoration:underline;">
+                                            Back to list
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div>
+                                <label style="display:block; font-size:11px; color:var(--text-muted); margin-bottom:4px;">Display Name</label>
+                                <input class="input" type="text" x-model="channelForm.channel_name"
+                                       placeholder="Optional" style="font-size:12px;">
+                            </div>
+                        </div>
+
+                        <!-- Hint when no channels discovered for Telegram -->
+                        <div x-show="discoveredChannels.length === 0 && channelForm.connector_id && selectedConnectorType === 'telegram' && !channelManualEntry"
+                             style="background:rgba(59,130,246,0.06); border:1px solid rgba(59,130,246,0.15); border-radius:8px; padding:8px 12px; font-size:11px; line-height:1.5; color:var(--text-secondary); margin-bottom:10px;">
+                            <strong>No chats found yet.</strong> Telegram bots can't list channels — they only discover chats when they receive a message.
+                            Send <span style="font-family:monospace;">/start</span> to the bot in a DM, or add it to a group and send a <span style="font-family:monospace;">/command</span> there (regular messages won't reach the bot in groups due to privacy mode). Then hit refresh.
+                        </div>
+
+                        <div style="display:flex; align-items:center; gap:16px;">
+                            <div style="display:flex; gap:12px; font-size:12px; color:var(--text-secondary);">
+                                <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
+                                    <input type="checkbox" x-model="channelForm.inbound"> Inbound
+                                </label>
+                                <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
+                                    <input type="checkbox" x-model="channelForm.outbound"> Outbound
+                                </label>
+                            </div>
+                            <div style="flex:1;"></div>
+                            <button class="btn btn-ghost btn-sm" @click="addChannel()">+ Add Binding</button>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- No connectors placeholder -->
+                <template x-if="Object.keys(connectorOptions).length === 0">
+                    <div style="padding-top:16px; border-top:1px solid var(--border); text-align:center; padding-bottom:8px;">
+                        <div style="color:var(--text-muted); font-size:13px; line-height:1.6;">
+                            No connectors configured. <a href="/settings" style="color:var(--accent); text-decoration:none;">Set up a connector</a> to bind channels to this project.
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+
+        <!-- Active Agents -->
+        {% if agents %}
+        <div style="margin-bottom:32px;">
+            <h2 style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); margin-bottom:12px;">Active Agents</h2>
+            <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(250px, 1fr)); gap:12px;">
+                {% for agent in agents %}
+                <a href="/agent/{{ agent.id }}" style="text-decoration:none; color:inherit;">
+                    <div class="agent-card">
+                        <div class="card-status-bar" style="background:var(--status-{{ agent.status.value }});"></div>
+                        <div class="card-header">
+                            <span class="card-id">{{ agent.id }}</span>
+                            <span class="status-badge {{ agent.status.value }}">{{ agent.status.value | replace('_', ' ') }}</span>
+                        </div>
+                        {% if agent.task_description %}
+                        <div class="card-task" style="min-height:auto;">{{ agent.task_description }}</div>
+                        {% endif %}
+                        <div style="font-size:11px; color:var(--text-muted); font-family:monospace; margin-top:8px;">{{ agent.branch_name }}</div>
+                    </div>
+                </a>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Danger Zone -->
+        <div>
+            <h2 style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--status-error); margin-bottom:12px;">Danger Zone</h2>
+            <div class="agent-card" style="cursor:default; border-color:rgba(239,68,68,0.2);">
+                <div style="display:flex; align-items:center; justify-content:space-between;">
+                    <div>
+                        <div style="font-size:14px; font-weight:500;">Delete this project</div>
+                        <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">Remove from configuration. Running agents will not be affected.</div>
+                    </div>
+                    <button class="btn btn-danger btn-sm" @click="deleteOpen = true" style="flex-shrink:0;">Delete Project</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation -->
+    <template x-if="deleteOpen">
+        <div class="modal-overlay" @click.self="deleteOpen = false" @keydown.escape.window="deleteOpen = false">
+            <div class="modal-panel" @click.stop style="max-width:400px;">
+                <h3 style="font-size:15px; font-weight:600; margin-bottom:12px;">Delete Project</h3>
+                <p style="font-size:13px; color:var(--text-secondary); line-height:1.6; margin-bottom:20px;">
+                    Are you sure you want to delete <strong style="color:var(--text-primary);">{{ project_name }}</strong>?
+                    This will remove it from the configuration. Running agents will not be affected.
+                </p>
+                <div style="display:flex; justify-content:flex-end; gap:8px;">
+                    <button class="btn btn-ghost btn-sm" @click="deleteOpen = false">Cancel</button>
+                    <button class="btn btn-danger btn-sm" @click="confirmDelete()">Delete</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const PROJECT_NAME = {{ project_name | tojson }};
+
+function projectSettings() {
+    return {
+        saving: false,
+        deleteOpen: false,
+        channels: [],
+        connectorOptions: {},
+        channelForm: { connector_id: '', channel_id: '', channel_name: '', inbound: true, outbound: true },
+        discoveredChannels: [],
+        selectedConnectorType: '',
+        channelManualEntry: false,
+        channelValidating: false,
+        channelValidatedName: '',
+
+        form: {
+            path: '',
+            default_branch: '',
+            description: '',
+            max_agents: 3,
+            agent_instructions: '',
+            context_files: []
+        },
+
+        async init() {
+            this.form.path = {{ project.path | tojson }};
+            this.form.default_branch = {{ project.default_branch | tojson }};
+            this.form.description = {{ project.description | tojson }};
+            this.form.max_agents = {{ project.max_agents or config.defaults.max_agents_per_project | tojson }};
+            this.form.agent_instructions = {{ project.agent_instructions | tojson }};
+            this.form.context_files = {{ project.context_files | tojson }};
+            this.channels = {{ project.channels | tojson }};
+
+            // Load connector options for the dropdown
+            try {
+                const res = await fetch('/api/config/connectors');
+                if (res.ok) this.connectorOptions = await res.json();
+            } catch(e) {}
+        },
+
+        async saveProject() {
+            this.saving = true;
+            try {
+                const res = await fetch('/api/config/projects/' + encodeURIComponent(PROJECT_NAME), {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        path: this.form.path,
+                        default_branch: this.form.default_branch,
+                        description: this.form.description,
+                        max_agents: parseInt(this.form.max_agents),
+                        agent_instructions: this.form.agent_instructions,
+                        context_files: this.form.context_files.filter(f => f.trim() !== '')
+                    })
+                });
+                if (res.ok) {
+                    showToast('Project settings saved');
+                } else {
+                    const detail = await res.json().then(d => d.detail || 'unknown').catch(() => res.statusText);
+                    showToast('Save failed: ' + detail, true);
+                }
+            } catch (e) {
+                showToast('Save failed: ' + e.message, true);
+            } finally {
+                this.saving = false;
+            }
+        },
+
+        async onConnectorChanged() {
+            this.discoveredChannels = [];
+            this.channelValidatedName = '';
+            this.selectedConnectorType = '';
+            this.channelManualEntry = false;
+            this.channelForm.channel_id = '';
+            this.channelForm.channel_name = '';
+            const connId = this.channelForm.connector_id;
+            if (!connId) return;
+            this.selectedConnectorType = this.connectorOptions[connId]?.type || '';
+            await this.fetchChannels();
+        },
+
+        onChannelSelected() {
+            if (this.channelForm.channel_id === '__manual__') {
+                this.channelManualEntry = true;
+                this.channelForm.channel_id = '';
+                this.channelForm.channel_name = '';
+                this.channelValidatedName = '';
+                return;
+            }
+            const ch = this.discoveredChannels.find(c => c.id === this.channelForm.channel_id);
+            if (ch) {
+                this.channelForm.channel_name = ch.name;
+                this.channelValidatedName = ch.name;
+            } else {
+                this.channelForm.channel_name = '';
+                this.channelValidatedName = '';
+            }
+        },
+
+        async fetchChannels() {
+            const connId = this.channelForm.connector_id;
+            if (!connId) return;
+            try {
+                const res = await fetch('/api/config/connectors/' + encodeURIComponent(connId) + '/channels');
+                if (res.ok) {
+                    const data = await res.json();
+                    this.discoveredChannels = data.channels || [];
+                } else {
+                    const detail = await res.json().then(d => d.detail).catch(() => res.statusText);
+                    showToast('Failed to load channels: ' + detail, true);
+                }
+            } catch (e) {
+                showToast('Failed to load channels: ' + e.message, true);
+            }
+        },
+
+        selectDiscoveredChannel(ch) {
+            this.channelForm.channel_id = ch.id;
+            this.channelForm.channel_name = ch.name;
+            this.channelValidatedName = ch.name;
+        },
+
+        async validateChannel() {
+            const connId = this.channelForm.connector_id;
+            const chId = this.channelForm.channel_id;
+            if (!connId || !chId) return;
+            this.channelValidating = true;
+            this.channelValidatedName = '';
+            try {
+                const res = await fetch('/api/config/connectors/' + encodeURIComponent(connId) + '/validate-channel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ channel_id: chId })
+                });
+                const data = await res.json();
+                if (data.valid && data.channel) {
+                    this.channelValidatedName = data.channel.name || '';
+                    if (!this.channelForm.channel_name) {
+                        this.channelForm.channel_name = data.channel.name || '';
+                    }
+                } else {
+                    showToast('Channel not found or unreachable', true);
+                }
+            } catch (e) {
+                showToast('Validation failed: ' + e.message, true);
+            } finally {
+                this.channelValidating = false;
+            }
+        },
+
+        async addChannel() {
+            if (!this.channelForm.connector_id || !this.channelForm.channel_id) {
+                showToast('Connector and Channel ID are required', true);
+                return;
+            }
+            try {
+                const res = await fetch('/api/config/projects/' + encodeURIComponent(PROJECT_NAME) + '/channels', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(this.channelForm)
+                });
+                if (res.ok) {
+                    this.channels.push({ ...this.channelForm });
+                    this.channelForm = { connector_id: '', channel_id: '', channel_name: '', inbound: true, outbound: true };
+                    this.channelValidatedName = '';
+                    this.discoveredChannels = [];
+                    this.selectedConnectorType = '';
+                    this.channelManualEntry = false;
+                    showToast('Channel binding added');
+                } else {
+                    const detail = await res.json().then(d => d.detail || 'unknown').catch(() => res.statusText);
+                    showToast('Failed: ' + detail, true);
+                }
+            } catch (e) {
+                showToast('Failed: ' + e.message, true);
+            }
+        },
+
+        async removeChannel(idx) {
+            try {
+                const res = await fetch('/api/config/projects/' + encodeURIComponent(PROJECT_NAME) + '/channels/' + idx, { method: 'DELETE' });
+                if (res.ok) {
+                    this.channels.splice(idx, 1);
+                    showToast('Channel binding removed');
+                } else {
+                    const detail = await res.json().then(d => d.detail || 'unknown').catch(() => res.statusText);
+                    showToast('Failed: ' + detail, true);
+                }
+            } catch (e) {
+                showToast('Failed: ' + e.message, true);
+            }
+        },
+
+        async confirmDelete() {
+            try {
+                const res = await fetch('/api/config/projects/' + encodeURIComponent(PROJECT_NAME), { method: 'DELETE' });
+                if (res.ok) {
+                    showToast('Project deleted. Redirecting...');
+                    setTimeout(() => window.location.href = '/config', 800);
+                } else {
+                    const detail = await res.json().then(d => d.detail || 'unknown').catch(() => res.statusText);
+                    showToast('Delete failed: ' + detail, true);
+                }
+            } catch (e) {
+                showToast('Delete failed: ' + e.message, true);
+            }
+        }
+    };
+}
+</script>
+{% endblock %}

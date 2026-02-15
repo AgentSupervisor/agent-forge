@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block title %}Projects - Agent Forge{% endblock %}
+{% block nav_config %}active{% endblock %}
+
+{% block content %}
+<div x-data="{
+    modalOpen: false,
+    deleteOpen: false,
+    deleteTarget: '',
+    deleteConfirm: '',
+    form: { name: '', path: '', default_branch: 'main', description: '', max_agents: 3 },
+
+    openAdd() {
+        this.form = { name: '', path: '', default_branch: 'main', description: '', max_agents: 3 };
+        this.modalOpen = true;
+        this.$nextTick(() => this.$refs.nameInput && this.$refs.nameInput.focus());
+    },
+
+    openDelete(name) {
+        this.deleteTarget = name;
+        this.deleteConfirm = '';
+        this.deleteOpen = true;
+    },
+
+    async submitForm() {
+        try {
+            const res = await fetch('/api/config/projects', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: this.form.name,
+                    path: this.form.path,
+                    default_branch: this.form.default_branch,
+                    description: this.form.description,
+                    max_agents: parseInt(this.form.max_agents)
+                })
+            });
+            if (res.ok) {
+                showToast('Project added');
+                this.modalOpen = false;
+                setTimeout(() => location.reload(), 400);
+            } else {
+                const detail = await res.json().then(d => d.detail || 'unknown').catch(() => res.statusText);
+                showToast('Add failed: ' + detail, true);
+            }
+        } catch (e) {
+            showToast('Request failed: ' + e.message, true);
+        }
+    },
+
+    async confirmDelete() {
+        try {
+            const res = await fetch('/api/config/projects/' + encodeURIComponent(this.deleteTarget), { method: 'DELETE' });
+            if (res.ok) {
+                showToast('Project deleted');
+                this.deleteOpen = false;
+                setTimeout(() => location.reload(), 400);
+            } else {
+                const detail = await res.json().then(d => d.detail || 'unknown').catch(() => res.statusText);
+                showToast('Delete failed: ' + detail, true);
+            }
+        } catch (e) {
+            showToast('Delete failed: ' + e.message, true);
+        }
+    }
+}">
+
+    <!-- Header bar -->
+    <div class="stats-bar">
+        <div class="stat-item">
+            <span class="stat-value">Projects</span>
+        </div>
+        <div style="width:1px; height:24px; background:var(--border); margin:0 4px;"></div>
+        <div class="stat-item">
+            <span class="stat-value">{{ config.projects | length }}</span>
+            <span>Projects</span>
+        </div>
+        <div style="flex:1;"></div>
+        <button class="btn btn-primary btn-sm" @click="openAdd()">Add Project</button>
+        <button class="btn btn-ghost btn-sm" onclick="reloadConfig()">Reload Config</button>
+    </div>
+
+    <!-- Content -->
+    <div style="padding: 24px;">
+
+        <!-- Projects -->
+        <div style="margin-bottom:32px;">
+            <h2 style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); margin-bottom:12px;">Projects</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+                {% for name, project in config.projects.items() %}
+                <div class="agent-card" style="cursor:default;">
+                    <div class="card-status-bar" style="background:var(--accent);"></div>
+                    <div class="card-header">
+                        <span class="card-id">{{ name }}</span>
+                        <span class="status-badge starting" style="font-size:11px;">max {{ config.get_max_agents(name) }}</span>
+                    </div>
+                    <div class="card-task" style="min-height:auto; margin-bottom:12px;">{{ project.description or 'No description' }}</div>
+                    <div class="card-meta">
+                        <div class="meta-item">
+                            <span style="color:var(--text-muted);">Branch:</span>
+                            <span style="font-family:monospace;">{{ project.default_branch }}</span>
+                        </div>
+                    </div>
+                    <div style="margin-top:12px; font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="{{ project.path }}">{{ project.path }}</div>
+                    {% if project.channels %}
+                    <div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:8px;">
+                        {% for ch in project.channels %}
+                        <span class="status-badge idle" style="font-size:10px; text-transform:none; font-family:monospace;">{{ ch.connector_id }}:{{ ch.channel_name or ch.channel_id }}</span>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                    <div class="card-actions" style="display:flex; gap:8px; margin-top:16px; padding-top:12px; border-top:1px solid var(--border);">
+                        <a href="/config/projects/{{ name }}" class="btn btn-ghost btn-xs" style="text-decoration:none;">
+                            Settings
+                        </a>
+                        <button class="btn btn-danger btn-xs" @click="openDelete('{{ name }}')">
+                            Delete
+                        </button>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Add Project Modal -->
+    <template x-if="modalOpen">
+        <div class="modal-overlay" @click.self="modalOpen = false" @keydown.escape.window="modalOpen = false">
+            <div class="modal-panel" @click.stop>
+                <h3 style="font-size:15px; font-weight:600; margin-bottom:20px;">Add Project</h3>
+                <form @submit.prevent="submitForm()" style="display:flex; flex-direction:column; gap:14px;">
+                    <!-- Name -->
+                    <div>
+                        <label style="display:block; font-size:12px; font-weight:500; color:var(--text-secondary); margin-bottom:6px;">Name</label>
+                        <input x-ref="nameInput" class="input" type="text" x-model="form.name"
+                               placeholder="e.g. my-project" required>
+                    </div>
+                    <!-- Path -->
+                    <div>
+                        <label style="display:block; font-size:12px; font-weight:500; color:var(--text-secondary); margin-bottom:6px;">Path</label>
+                        <input class="input" type="text" x-model="form.path"
+                               placeholder="/home/user/projects/my-project" required>
+                    </div>
+                    <!-- Default Branch -->
+                    <div>
+                        <label style="display:block; font-size:12px; font-weight:500; color:var(--text-secondary); margin-bottom:6px;">Default Branch</label>
+                        <input class="input" type="text" x-model="form.default_branch" placeholder="main">
+                    </div>
+                    <!-- Description -->
+                    <div>
+                        <label style="display:block; font-size:12px; font-weight:500; color:var(--text-secondary); margin-bottom:6px;">Description</label>
+                        <textarea class="input textarea" rows="2" x-model="form.description" placeholder="Optional description" style="resize:vertical;"></textarea>
+                    </div>
+                    <!-- Max Agents -->
+                    <div>
+                        <label style="display:block; font-size:12px; font-weight:500; color:var(--text-secondary); margin-bottom:6px;">Max Agents</label>
+                        <input class="input" type="number" x-model="form.max_agents" min="1" max="20" placeholder="3">
+                    </div>
+                    <!-- Actions -->
+                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:6px;">
+                        <button type="button" class="btn btn-ghost btn-sm" @click="modalOpen = false">Cancel</button>
+                        <button type="submit" class="btn btn-primary btn-sm">Add Project</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </template>
+
+    <!-- Delete Confirmation Dialog -->
+    <template x-if="deleteOpen">
+        <div class="modal-overlay" @click.self="deleteOpen = false" @keydown.escape.window="deleteOpen = false">
+            <div class="modal-panel" @click.stop style="max-width:440px;">
+                <h3 style="font-size:15px; font-weight:600; margin-bottom:12px;">Remove project</h3>
+                <p style="font-size:13px; color:var(--text-secondary); line-height:1.6; margin-bottom:8px;">
+                    This will remove <strong x-text="deleteTarget" style="color:var(--text-primary);"></strong> from Agent Forge. No files, repositories, or worktrees on disk will be deleted. Running agents for this project will not be affected.
+                </p>
+                <p style="font-size:13px; color:var(--text-secondary); line-height:1.6; margin-bottom:16px;">
+                    You can always re-add the project later by pointing to the same path.
+                </p>
+                <div style="margin-bottom:16px;">
+                    <label style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:6px;">
+                        Type <strong x-text="deleteTarget" style="color:var(--text-primary);"></strong> to confirm
+                    </label>
+                    <input class="input" type="text" x-model="deleteConfirm"
+                           placeholder="Project name"
+                           @keydown.enter="deleteConfirm === deleteTarget && confirmDelete()">
+                </div>
+                <div style="display:flex; justify-content:flex-end; gap:8px;">
+                    <button class="btn btn-ghost btn-sm" @click="deleteOpen = false">Cancel</button>
+                    <button class="btn btn-danger btn-sm"
+                            :disabled="deleteConfirm !== deleteTarget"
+                            @click="confirmDelete()">Remove project</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+</div>
+{% endblock %}

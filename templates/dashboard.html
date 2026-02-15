@@ -1,0 +1,354 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Agent Forge{% endblock %}
+{% block nav_home %}active{% endblock %}
+
+{% block content %}
+<div x-data="dashboard()" x-init="init()" @open-spawn-modal.window="spawnModalOpen = true">
+
+    <!-- Header bar -->
+    <div class="stats-bar" id="stats-bar">
+        <div class="stat-item">
+            <span class="stat-value">Dashboard</span>
+        </div>
+        <div style="width:1px; height:24px; background:var(--border); margin:0 4px;"></div>
+        <div class="stat-item">
+            <span class="stat-value" id="stat-total">{{ total_agents }}</span>
+            <span>Agents</span>
+        </div>
+        <div style="width:1px; height:24px; background:var(--border); margin:0 4px;"></div>
+        <div class="stat-item">
+            <span class="stat-dot" style="background:var(--status-working);"></span>
+            <span class="stat-value" id="stat-working">0</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-dot" style="background:var(--status-waiting);"></span>
+            <span class="stat-value" id="stat-waiting_input">0</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-dot" style="background:var(--status-idle);"></span>
+            <span class="stat-value" id="stat-idle">0</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-dot" style="background:var(--status-error);"></span>
+            <span class="stat-value" id="stat-error">0</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-dot" style="background:var(--status-starting);"></span>
+            <span class="stat-value" id="stat-starting">0</span>
+        </div>
+        <div style="flex:1;"></div>
+        <button class="btn btn-primary btn-sm" @click="spawnModalOpen = true">
+            + Spawn Agent <span class="kbd" style="margin-left:6px;">&#8984;K</span>
+        </button>
+    </div>
+
+    <!-- Content -->
+    <div style="padding: 24px;">
+        <div style="margin-bottom:32px;">
+            <h2 style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); margin-bottom:12px;">Agents</h2>
+        <div id="agent-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5">
+            {% for agent in agents %}
+            <div class="agent-card" id="card-{{ agent.id }}" onclick="window.location='/agent/{{ agent.id }}'">
+                <div class="card-status-bar" style="background:
+                    {% if agent.status.value == 'working' %}var(--status-working)
+                    {% elif agent.status.value == 'waiting_input' %}var(--status-waiting)
+                    {% elif agent.status.value == 'idle' %}var(--status-idle)
+                    {% elif agent.status.value == 'error' %}var(--status-error)
+                    {% elif agent.status.value == 'starting' %}var(--status-starting)
+                    {% else %}var(--status-stopped){% endif %};"></div>
+                <div class="card-header">
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <span class="pulse-dot {{ agent.status.value }}" id="dot-{{ agent.id }}"></span>
+                        <span class="card-id">{{ agent.id }}</span>
+                    </div>
+                    <span class="status-badge {{ agent.status.value }}" id="badge-{{ agent.id }}">{{ agent.status.value | replace('_', ' ') }}</span>
+                </div>
+                <div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;">
+                    <span class="card-project">{{ agent.project_name }}</span>
+                    {% if agent.profile %}
+                    <span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--accent);color:#fff;font-weight:600;">{{ agent.profile }}</span>
+                    {% endif %}
+                </div>
+                <div class="card-task">{{ agent.task_description or 'No task description' }}</div>
+                <div class="card-meta">
+                    <div class="meta-item" title="Uptime">
+                        <span>&#9201;</span>
+                        <span id="uptime-{{ agent.id }}" data-created="{{ agent.created_at.isoformat() }}"></span>
+                    </div>
+                    <div class="meta-item" title="Branch">
+                        <span>&#9744;</span>
+                        <span style="font-family:monospace;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ agent.branch_name }}">{{ agent.branch_name.split('/')[-1] }}</span>
+                    </div>
+                    <div class="meta-item" title="Sub-agents" id="sub-{{ agent.id }}">
+                        <span>&#9679;</span>
+                        <span>{{ agent.sub_agent_count }} sub</span>
+                    </div>
+                </div>
+                <div class="card-actions" onclick="event.stopPropagation();">
+                    <button class="btn btn-ghost btn-xs" onclick="window.location='/agent/' + '{{ agent.id }}'">View</button>
+                    <button class="btn btn-danger btn-xs" onclick="killAgent('{{ agent.id }}')">Kill</button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        {% if not agents %}
+        <div class="empty-state" id="empty-state">
+            <div class="empty-icon">&#9881;</div>
+            <p>No active agents. Spawn one to get started.</p>
+            <button class="btn btn-primary" style="margin-top:20px;" @click="spawnModalOpen = true">
+                + Spawn Agent
+            </button>
+        </div>
+        {% endif %}
+        </div>
+    </div>
+
+    <!-- Spawn modal -->
+    <div x-show="spawnModalOpen" x-cloak class="modal-overlay"
+         @keydown.escape.window="spawnModalOpen = false">
+        <div class="modal-panel" @click.outside="spawnModalOpen = false">
+            <h3 style="font-size:18px;font-weight:700;color:var(--text-primary);margin-bottom:20px;">Spawn Agent</h3>
+            <div style="display:flex;flex-direction:column;gap:16px;">
+                <div>
+                    <label style="display:block;font-size:13px;font-weight:500;color:var(--text-secondary);margin-bottom:6px;">Project</label>
+                    <select x-model="spawnProject" class="select">
+                        {% for name in projects %}
+                        <option value="{{ name }}">{{ name }}{% if projects[name].description %} — {{ projects[name].description }}{% endif %}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label style="display:block;font-size:13px;font-weight:500;color:var(--text-secondary);margin-bottom:6px;">Task Description</label>
+                    <textarea x-model="spawnTask" rows="4" placeholder="Describe the task for the agent..."
+                              class="textarea"
+                              @keydown.ctrl.enter="spawnAgent()"
+                              @keydown.meta.enter="spawnAgent()"></textarea>
+                    <span style="font-size:11px;color:var(--text-muted);margin-top:4px;display:block;">Ctrl+Enter to submit</span>
+                </div>
+                {% if profiles %}
+                <div>
+                    <label style="display:block;font-size:13px;font-weight:500;color:var(--text-secondary);margin-bottom:6px;">Profile</label>
+                    <select x-model="spawnProfile" class="select">
+                        <option value="">None (default)</option>
+                        {% for name, prof in profiles.items() %}
+                        <option value="{{ name }}">{{ name }}{% if prof.description %} — {{ prof.description }}{% endif %}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500;color:var(--text-secondary);cursor:pointer;">
+                        <input type="checkbox" x-model="compareMode" style="accent-color:var(--accent);">
+                        Comparison Mode
+                    </label>
+                </div>
+                <template x-if="compareMode">
+                    <div style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--surface);">
+                        <label style="display:block;font-size:12px;font-weight:500;color:var(--text-secondary);margin-bottom:8px;">Select profiles to compare</label>
+                        {% for name, prof in profiles.items() %}
+                        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-primary);margin-bottom:4px;cursor:pointer;">
+                            <input type="checkbox" value="{{ name }}" x-model="compareProfiles" style="accent-color:var(--accent);">
+                            {{ name }}{% if prof.description %} <span style="color:var(--text-muted);font-size:11px;">— {{ prof.description }}</span>{% endif %}
+                        </label>
+                        {% endfor %}
+                        <div style="margin-top:8px;">
+                            <label style="display:block;font-size:12px;font-weight:500;color:var(--text-secondary);margin-bottom:4px;">Agent count (0 = one per profile)</label>
+                            <input type="number" x-model.number="compareCount" min="0" max="10" value="0" class="select" style="width:80px;">
+                        </div>
+                    </div>
+                </template>
+                {% endif %}
+                <div style="display:flex;justify-content:flex-end;gap:12px;padding-top:8px;">
+                    <button class="btn btn-ghost" @click="spawnModalOpen = false">Cancel</button>
+                    <button class="btn btn-primary" @click="spawnAgent()" :disabled="spawning">
+                        <span x-show="!spawning">Spawn</span>
+                        <span x-show="spawning">Spawning...</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function dashboard() {
+    return {
+        spawnModalOpen: false,
+        spawnProject: '{{ (projects.keys()|list)[0] if projects else "" }}',
+        spawnTask: '',
+        spawnProfile: '',
+        compareMode: false,
+        compareProfiles: [],
+        compareCount: 0,
+        spawning: false,
+
+        init() {
+            this.refreshStats();
+            this.updateUptimes();
+            setInterval(() => this.refreshStats(), 5000);
+            setInterval(() => this.updateUptimes(), 10000);
+        },
+
+        async refreshStats() {
+            try {
+                const res = await fetch('/api/stats');
+                if (!res.ok) return;
+                const data = await res.json();
+                const el = (id) => document.getElementById(id);
+                el('stat-total').textContent = data.total;
+                for (const [status, count] of Object.entries(data.by_status)) {
+                    const s = el('stat-' + status);
+                    if (s) s.textContent = count;
+                }
+            } catch (e) { /* silent */ }
+        },
+
+        updateUptimes() {
+            document.querySelectorAll('[id^="uptime-"]').forEach(el => {
+                const id = el.id.replace('uptime-', '');
+                const created = el.dataset.created;
+                if (!created) return;
+                el.textContent = formatUptime(created);
+            });
+        },
+
+        async spawnAgent() {
+            if (!this.spawnProject || this.spawning) return;
+            this.spawning = true;
+            try {
+                let res;
+                if (this.compareMode && this.compareProfiles.length > 0) {
+                    res = await fetch('/api/agents/compare', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            project: this.spawnProject,
+                            task: this.spawnTask,
+                            profiles: this.compareProfiles,
+                            count: this.compareCount || 0,
+                        }),
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        this.spawnModalOpen = false;
+                        this.spawnTask = '';
+                        this.compareProfiles = [];
+                        this.compareCount = 0;
+                        this.compareMode = false;
+                        showToast(data.length + ' comparison agents spawned');
+                        data.forEach(a => addAgentCard(a));
+                        this.refreshStats();
+                    } else {
+                        showToast(data.detail || 'Failed to spawn comparison agents', true);
+                    }
+                } else {
+                    res = await fetch('/api/agents', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            project: this.spawnProject,
+                            task: this.spawnTask,
+                            profile: this.spawnProfile,
+                        }),
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        this.spawnModalOpen = false;
+                        this.spawnTask = '';
+                        showToast('Agent ' + data.id + ' spawned');
+                        addAgentCard(data);
+                        this.refreshStats();
+                    } else {
+                        showToast(data.detail || 'Failed to spawn agent', true);
+                    }
+                }
+            } catch (e) {
+                showToast('Error: ' + e.message, true);
+            } finally {
+                this.spawning = false;
+            }
+        }
+    }
+}
+
+const STATUS_COLORS = {
+    working: 'var(--status-working)',
+    waiting_input: 'var(--status-waiting)',
+    idle: 'var(--status-idle)',
+    error: 'var(--status-error)',
+    starting: 'var(--status-starting)',
+    stopped: 'var(--status-stopped)',
+};
+
+function formatUptime(createdAt) {
+    const diff = Date.now() - new Date(createdAt).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 60) return mins + 'm';
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return hours + 'h ' + (mins % 60) + 'm';
+    const days = Math.floor(hours / 24);
+    return days + 'd ' + (hours % 24) + 'h';
+}
+
+function addAgentCard(a) {
+    const empty = document.getElementById('empty-state');
+    if (empty) empty.remove();
+    const grid = document.getElementById('agent-grid');
+    const statusLabel = (a.status || 'starting').replace('_', ' ');
+    grid.insertAdjacentHTML('beforeend', `
+        <div class="agent-card" id="card-${a.id}" onclick="window.location='/agent/${a.id}'">
+            <div class="card-status-bar" style="background:${STATUS_COLORS[a.status] || STATUS_COLORS.starting};"></div>
+            <div class="card-header">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span class="pulse-dot ${a.status || 'starting'}" id="dot-${a.id}"></span>
+                    <span class="card-id">${a.id}</span>
+                </div>
+                <span class="status-badge ${a.status || 'starting'}" id="badge-${a.id}">${statusLabel}</span>
+            </div>
+            <div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;">
+                <span class="card-project">${a.project_name}</span>
+                ${a.profile ? `<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--accent);color:#fff;font-weight:600;">${a.profile}</span>` : ''}
+            </div>
+            <div class="card-task">${a.task_description || 'No task description'}</div>
+            <div class="card-meta">
+                <div class="meta-item" title="Uptime">
+                    <span>&#9201;</span>
+                    <span id="uptime-${a.id}" data-created="${a.created_at}">0m</span>
+                </div>
+                <div class="meta-item" title="Branch">
+                    <span>&#9744;</span>
+                    <span style="font-family:monospace;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${(a.branch_name || '').split('/').pop()}</span>
+                </div>
+                <div class="meta-item" title="Sub-agents" id="sub-${a.id}">
+                    <span>&#9679;</span>
+                    <span>${a.sub_agent_count || 0} sub</span>
+                </div>
+            </div>
+            <div class="card-actions" onclick="event.stopPropagation();">
+                <button class="btn btn-ghost btn-xs" onclick="window.location='/agent/${a.id}'">View</button>
+                <button class="btn btn-danger btn-xs" onclick="killAgent('${a.id}')">Kill</button>
+            </div>
+        </div>
+    `);
+}
+
+async function killAgent(agentId) {
+    if (!confirm('Kill agent ' + agentId + '?')) return;
+    try {
+        const res = await fetch('/api/agents/' + agentId, { method: 'DELETE' });
+        if (res.ok) {
+            const card = document.getElementById('card-' + agentId);
+            if (card) card.remove();
+            showToast('Agent ' + agentId + ' killed');
+        } else {
+            const detail = await res.json().then(d => d.detail || 'Failed to kill agent').catch(() => res.statusText);
+            showToast(detail, true);
+        }
+    } catch (e) {
+        showToast('Error: ' + e.message, true);
+    }
+}
+</script>
+{% endblock %}

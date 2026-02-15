@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Console - Agent Forge{% endblock %}
+{% block nav_console %}active{% endblock %}
+
+{% block content %}
+<div x-data="consolePage()" x-init="init()">
+
+    <!-- Header bar -->
+    <div class="stats-bar">
+        <div class="stat-item">
+            <span class="stat-value">Console</span>
+        </div>
+        <div style="width:1px; height:24px; background:var(--border); margin:0 4px;"></div>
+        <div class="stat-item">
+            <span class="stat-value" x-text="logCount"></span>
+            <span>entries</span>
+        </div>
+        <div style="flex:1;"></div>
+        <div class="stat-item">
+            <span class="status-badge" :class="connected ? 'working' : 'error'"
+                  x-text="connected ? 'Live' : 'Disconnected'"></span>
+        </div>
+        <button class="btn btn-ghost btn-sm" @click="clearLogs()">Clear</button>
+    </div>
+
+    <!-- Content -->
+    <div style="padding: 24px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+            <h2 style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted);">Log Output</h2>
+            <div class="console-filters">
+                <select class="input" x-model="levelFilter">
+                    <option value="">All levels</option>
+                    <option value="DEBUG">DEBUG</option>
+                    <option value="INFO">INFO</option>
+                    <option value="WARNING">WARNING</option>
+                    <option value="ERROR">ERROR</option>
+                </select>
+                <input class="input" type="text" x-model="textFilter" placeholder="Filter...">
+            </div>
+        </div>
+
+        <!-- Log output -->
+        <div x-ref="logContainer" class="console-log-container" @scroll.debounce.100ms="onScroll()">
+
+        <template x-for="(log, i) in filteredLogs" :key="i">
+            <div class="log-entry"
+                 :class="log.level === 'ERROR' ? 'level-error' :
+                          log.level === 'WARNING' ? 'level-warning' :
+                          log.level === 'DEBUG' ? 'level-debug' : ''">
+                <span class="log-timestamp" x-text="log.timestamp"></span>
+                <span class="log-level"
+                      :class="'level-' + log.level.toLowerCase()"
+                      x-text="log.level"></span>
+                <span class="log-name" x-text="log.name"></span>
+                <span class="log-message" x-text="log.message"></span>
+            </div>
+        </template>
+
+        <div x-show="filteredLogs.length === 0" class="console-empty">
+            <template x-if="logs.length === 0">
+                <span>Waiting for logs...</span>
+            </template>
+            <template x-if="logs.length > 0">
+                <span>No logs match the current filter.</span>
+            </template>
+        </div>
+        </div>
+    </div>
+
+    <!-- Floating auto-scroll toggle -->
+    <button class="console-scroll-btn" :class="autoScroll ? 'active' : ''"
+            @click="autoScroll = !autoScroll; autoScroll && $nextTick(() => scrollToBottom())"
+            :title="autoScroll ? 'Following new logs (click to pause)' : 'Scroll paused (click to follow)'">
+        <span x-text="autoScroll ? '&#8615;' : '&#9208;'"></span>
+    </button>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function consolePage() {
+    return {
+        logs: [],
+        logCount: 0,
+        connected: false,
+        ws: null,
+        levelFilter: '',
+        textFilter: '',
+        autoScroll: true,
+
+        get filteredLogs() {
+            let result = this.logs;
+            if (this.levelFilter) {
+                const levels = { 'DEBUG': 0, 'INFO': 1, 'WARNING': 2, 'ERROR': 3 };
+                const min = levels[this.levelFilter] || 0;
+                result = result.filter(l => (levels[l.level] || 0) >= min);
+            }
+            if (this.textFilter) {
+                const q = this.textFilter.toLowerCase();
+                result = result.filter(l =>
+                    l.message.toLowerCase().includes(q) ||
+                    l.name.toLowerCase().includes(q)
+                );
+            }
+            return result;
+        },
+
+        init() {
+            this.connectWs();
+        },
+
+        connectWs() {
+            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            this.ws = new WebSocket(proto + '//' + location.host + '/ws/logs');
+
+            this.ws.onopen = () => { this.connected = true; };
+
+            this.ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === 'history') {
+                    this.logs = data.logs;
+                    this.logCount = this.logs.length;
+                    this.$nextTick(() => this.scrollToBottom());
+                } else if (data.type === 'log') {
+                    this.logs.push(data);
+                    this.logCount = this.logs.length;
+                    // Cap at 5000 entries in the UI
+                    if (this.logs.length > 5000) {
+                        this.logs = this.logs.slice(-4000);
+                    }
+                    if (this.autoScroll) {
+                        this.$nextTick(() => this.scrollToBottom());
+                    }
+                }
+            };
+
+            this.ws.onclose = () => {
+                this.connected = false;
+                setTimeout(() => this.connectWs(), 2000);
+            };
+
+            this.ws.onerror = () => { this.ws.close(); };
+        },
+
+        scrollToBottom() {
+            const el = this.$refs.logContainer;
+            if (el) el.scrollTop = el.scrollHeight;
+        },
+
+        onScroll() {
+            const el = this.$refs.logContainer;
+            if (!el) return;
+            // If user scrolled near the bottom (within 60px), re-enable auto-scroll
+            const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+            if (atBottom && !this.autoScroll) {
+                this.autoScroll = true;
+            } else if (!atBottom && this.autoScroll) {
+                this.autoScroll = false;
+            }
+        },
+
+        clearLogs() {
+            this.logs = [];
+            this.logCount = 0;
+        }
+    };
+}
+</script>
+{% endblock %}
