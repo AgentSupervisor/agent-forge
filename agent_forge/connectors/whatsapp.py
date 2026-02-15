@@ -329,11 +329,16 @@ class WhatsAppConnector(BaseConnector):
         # Handle media
         media_paths: list[str] = []
         if data.get("media"):
+            from .base import ensure_extension
+
             media_info = data["media"]
             src = Path(media_info["path"])
             if src.exists():
                 tmp_dir = tempfile.mkdtemp(prefix="forge_wa_media_")
-                dest = Path(tmp_dir) / (media_info.get("filename") or src.name)
+                file_name = media_info.get("filename") or src.name
+                content_type = media_info.get("mimetype", "")
+                file_name = ensure_extension(file_name, content_type)
+                dest = Path(tmp_dir) / file_name
                 shutil.copy2(str(src), str(dest))
                 media_paths.append(str(dest))
 
