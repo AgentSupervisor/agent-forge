@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .base import ActionButton, BaseConnector, ConnectorType, InboundMessage, OutboundMessage
+from .base import ActionButton, BaseConnector, ConnectorType, InboundMessage, OutboundMessage, extract_agent_from_text
 
 logger = logging.getLogger(__name__)
 
@@ -255,8 +255,12 @@ class TelegramConnector(BaseConnector):
         project_name, agent_id = self._parse_routing(text)
         if project_name:
             # Strip the @project[:agent] prefix from the text
-            match = re.match(r"^@[\w-]+(?::[\w-]+)?\s+(.*)", text, re.DOTALL)
+            match = re.match(r"^@[\w-]+(?::[\w-]+)?[:\s]\s*(.*)", text, re.DOTALL)
             text = match.group(1).strip() if match else text
+
+        # Extract agent_id from replied-to bot message
+        if not agent_id:
+            agent_id = self._extract_reply_agent(update)
 
         msg = InboundMessage(
             connector_id=self.connector_id,
@@ -281,31 +285,48 @@ class TelegramConnector(BaseConnector):
         caption = update.message.caption or ""
         project_name, agent_id = self._parse_routing(caption)
         if project_name:
-            match = re.match(r"^@[\w-]+(?::[\w-]+)?\s+(.*)", caption, re.DOTALL)
+            match = re.match(r"^@[\w-]+(?::[\w-]+)?[:\s]\s*(.*)", caption, re.DOTALL)
             caption = match.group(1).strip() if match else caption
+
+        # Extract agent_id from replied-to bot message
+        if not agent_id:
+            agent_id = self._extract_reply_agent(update)
 
         # Download attachment
         media_paths: list[str] = []
         try:
             file_obj = None
+            fallback_ext = ""
             if update.message.photo:
                 file_obj = await update.message.photo[-1].get_file()
+                fallback_ext = ".jpg"
             elif update.message.video:
                 file_obj = await update.message.video.get_file()
+                fallback_ext = ".mp4"
+            elif update.message.video_note:
+                file_obj = await update.message.video_note.get_file()
+                fallback_ext = ".mp4"
+            elif update.message.animation:
+                file_obj = await update.message.animation.get_file()
+                fallback_ext = ".mp4"
             elif update.message.audio:
                 file_obj = await update.message.audio.get_file()
+                fallback_ext = ".mp3"
             elif update.message.voice:
                 file_obj = await update.message.voice.get_file()
+                fallback_ext = ".ogg"
+            elif update.message.sticker:
+                file_obj = await update.message.sticker.get_file()
+                fallback_ext = ".webp"
             elif update.message.document:
                 file_obj = await update.message.document.get_file()
 
             if file_obj:
                 tmp_dir = tempfile.mkdtemp(prefix="forge_media_")
-                file_name = (
-                    Path(file_obj.file_path).name
-                    if file_obj.file_path
-                    else "attachment"
-                )
+                if file_obj.file_path:
+                    file_name = Path(file_obj.file_path).name
+                else:
+                    file_name = f"attachment{fallback_ext}"
                 tmp_path = Path(tmp_dir) / file_name
                 await file_obj.download_to_drive(str(tmp_path))
                 media_paths.append(str(tmp_path))
@@ -361,10 +382,25 @@ class TelegramConnector(BaseConnector):
 
         await query.answer(f"{action} sent")
 
+    def _extract_reply_agent(self, update: Any) -> str:
+        """Extract agent_id from a replied-to bot message, if any."""
+        reply = getattr(update.message, "reply_to_message", None)
+        if not reply:
+            return ""
+        # Only consider replies to our own bot messages
+        if not self._bot or not reply.from_user:
+            return ""
+        bot_id = getattr(self._bot, "id", None) or getattr(self._bot, "bot", {})
+        if hasattr(bot_id, "id"):
+            bot_id = bot_id.id
+        if reply.from_user.id != bot_id:
+            return ""
+        return extract_agent_from_text(reply.text or reply.caption or "")
+
     @staticmethod
     def _parse_routing(text: str) -> tuple[str, str]:
         """Extract @project[:agent_id] from text. Returns (project, agent_id)."""
-        match = re.match(r"^@([\w-]+)(?::([\w-]+))?\s", text)
+        match = re.match(r"^@([\w-]+)(?::([\w-]+))?[:\s]", text)
         if not match:
             return "", ""
         return match.group(1), match.group(2) or ""

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from agent_forge.agent_manager import AgentStatus
 from agent_forge.telegram_gateway import TelegramGateway
 
 
@@ -299,31 +300,45 @@ class TestHandleMessage:
         assert "Unknown project" in reply
 
     @pytest.mark.asyncio
-    async def test_no_agents_for_project(self, gateway, mock_agent_manager):
+    async def test_auto_spawns_when_no_agents(self, gateway, mock_agent_manager):
         mock_agent_manager.registry.list_projects.return_value = {"proj": MagicMock()}
         mock_agent_manager.list_agents.return_value = []
+
+        new_agent = MagicMock()
+        new_agent.id = "new123"
+        mock_agent_manager.spawn_agent.return_value = new_agent
+
         update = _make_update(user_id=111, text="@proj do something")
         await gateway._handle_message(update, _make_context())
+
+        mock_agent_manager.spawn_agent.assert_awaited_once_with("proj", task="do something")
         reply = update.message.reply_text.call_args[0][0]
-        assert "No active agents" in reply
+        assert "Spawned" in reply
+        assert "new123" in reply
 
     @pytest.mark.asyncio
-    async def test_route_to_most_recent_agent(self, gateway, mock_agent_manager):
+    async def test_route_to_most_recent_idle_agent(self, gateway, mock_agent_manager):
         mock_agent_manager.registry.list_projects.return_value = {"proj": MagicMock()}
+        mock_agent_manager.clear_context = AsyncMock(return_value=True)
 
         old_agent = MagicMock()
         old_agent.id = "old"
+        old_agent.status = AgentStatus.IDLE
         old_agent.last_activity = datetime(2024, 1, 1)
+        old_agent.task_description = ""
 
         new_agent = MagicMock()
         new_agent.id = "new"
+        new_agent.status = AgentStatus.IDLE
         new_agent.last_activity = datetime(2024, 6, 1)
+        new_agent.task_description = ""
 
         mock_agent_manager.list_agents.return_value = [old_agent, new_agent]
 
         update = _make_update(user_id=111, text="@proj fix it")
         await gateway._handle_message(update, _make_context())
 
+        mock_agent_manager.clear_context.assert_awaited_once_with("new")
         mock_agent_manager.send_message.assert_awaited_once_with("new", "fix it")
 
     @pytest.mark.asyncio
@@ -373,10 +388,13 @@ class TestHandleMediaMessage:
         self, gateway, mock_agent_manager, mock_media_handler
     ):
         mock_agent_manager.registry.list_projects.return_value = {"proj": MagicMock()}
+        mock_agent_manager.clear_context = AsyncMock(return_value=True)
         agent = MagicMock()
         agent.id = "abc123"
+        agent.status = AgentStatus.IDLE
         agent.worktree_path = "/tmp/worktree"
         agent.last_activity = datetime(2024, 6, 1)
+        agent.task_description = ""
         mock_agent_manager.list_agents.return_value = [agent]
 
         file_obj = AsyncMock()
