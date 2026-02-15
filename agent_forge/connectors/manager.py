@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import logging
 from typing import Any
@@ -239,21 +240,64 @@ class ConnectorManager:
             return
 
         # Resolve agent
+        newly_spawned = False
         if agent_id:
             agent = self.agent_manager.get_agent(agent_id)
             if not agent:
                 await self._reply(msg, f"Agent `{agent_id}` not found.")
                 return
         else:
-            agents = self.agent_manager.list_agents(project_name=project_name)
-            if not agents:
-                await self._reply(
-                    msg, f"No active agents for {project_name}. Use /spawn first."
-                )
+            result = await self._smart_route(project_name, msg)
+            if result is None:
                 return
-            agent = max(agents, key=lambda a: a.last_activity)
+            agent, newly_spawned = result
 
-        # Send message (with or without media)
+        if newly_spawned:
+            # Message text is sent via the spawn start sequence.
+            # Handle media staging if needed.
+            if msg.media_paths and self.media_handler:
+                try:
+                    staged = []
+                    for media_path in msg.media_paths:
+                        result = await self.media_handler.process_and_stage(
+                            source_path=media_path,
+                            worktree_path=agent.worktree_path,
+                        )
+                        staged.extend(result)
+                    if staged:
+                        # Send media references after the start sequence finishes
+                        async def _send_media_refs(
+                            aid: str = agent.id, paths: list[str] = staged
+                        ) -> None:
+                            await asyncio.sleep(5.0)
+                            refs = "\n".join(f"  - {p}" for p in paths)
+                            await self.agent_manager.send_message(
+                                aid, f"Media files staged:\n{refs}"
+                            )
+
+                        asyncio.ensure_future(_send_media_refs())
+                    file_list = "\n".join(f"  - {p}" for p in staged)
+                    await self._reply(
+                        msg,
+                        f"Spawned agent `{agent.id}` for {project_name}\n"
+                        f"Staged:\n{file_list}",
+                    )
+                except Exception:
+                    logger.exception("Failed to process media for auto-spawned agent")
+                    await self._reply(
+                        msg,
+                        f"Spawned agent `{agent.id}` for {project_name}"
+                        " (media staging failed)",
+                    )
+            else:
+                await self._reply(
+                    msg, f"Spawned agent `{agent.id}` for {project_name}"
+                )
+            self._set_context(msg.connector_id, msg.channel_id, agent.id)
+            self._track_reply_channel(msg.connector_id, msg.channel_id, project_name)
+            return
+
+        # Send message to an existing agent (with or without media)
         if msg.media_paths and self.media_handler:
             try:
                 staged = []
@@ -281,6 +325,65 @@ class ConnectorManager:
                 self._track_reply_channel(msg.connector_id, msg.channel_id, project_name)
             else:
                 await self._reply(msg, f"Failed to send message to `{agent.id}`.")
+
+    async def _smart_route(
+        self, project_name: str, msg: InboundMessage
+    ) -> tuple[Any, bool] | None:
+        """Smart load balancer: find an available agent or spawn a new one.
+
+        Returns (agent, newly_spawned) or None if routing failed (reply already sent).
+
+        Priority:
+        1. IDLE agents — free to take a new task (context is cleared first)
+        2. If all agents are busy, spawn a new one (if under limit)
+        3. If at limit and all busy, report to the user
+        """
+        from ..agent_manager import AgentStatus
+
+        agents = self.agent_manager.list_agents(project_name=project_name)
+        active_agents = [a for a in agents if a.status != AgentStatus.STOPPED]
+
+        if not active_agents:
+            return await self._auto_spawn(project_name, msg)
+
+        # Prefer IDLE agents — they're at a prompt and free for a new task
+        idle_agents = [a for a in active_agents if a.status == AgentStatus.IDLE]
+        if idle_agents:
+            agent = max(idle_agents, key=lambda a: a.last_activity)
+            await self.agent_manager.clear_context(agent.id)
+            agent.task_description = msg.text[:200]
+            return agent, False
+
+        # All agents are busy — try to spawn a new one
+        config = self.agent_manager.registry.config
+        max_agents = config.get_max_agents(project_name)
+
+        if len(active_agents) < max_agents:
+            return await self._auto_spawn(project_name, msg)
+
+        # At limit and all busy
+        busy_list = "\n".join(
+            f"  [{a.status.value}] {a.id}"
+            + (f" — {a.task_description}" if a.task_description else "")
+            for a in active_agents
+        )
+        await self._reply(
+            msg,
+            f"All agents for {project_name} are busy"
+            f" ({len(active_agents)}/{max_agents}):\n{busy_list}",
+        )
+        return None
+
+    async def _auto_spawn(
+        self, project_name: str, msg: InboundMessage
+    ) -> tuple[Any, bool] | None:
+        """Spawn a new agent for the project. Returns (agent, True) or None on failure."""
+        try:
+            agent = await self.agent_manager.spawn_agent(project_name, task=msg.text)
+            return agent, True
+        except RuntimeError as exc:
+            await self._reply(msg, f"Failed to spawn agent: {exc}")
+            return None
 
     def _resolve_control_agent(self, msg: InboundMessage) -> str | None:
         """Resolve target agent for a control command.
