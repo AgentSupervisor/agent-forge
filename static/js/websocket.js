@@ -157,6 +157,9 @@
         var terminal = document.getElementById("terminal-view");
         if (!terminal) return;
 
+        if (window._terminalAutoScroll === false) return;
+
+        window._ignoreScrollUntil = Date.now() + 200;
         if (window._ansiUp) {
             terminal.innerHTML = window._ansiUp.ansi_to_html(data.output);
         } else {
