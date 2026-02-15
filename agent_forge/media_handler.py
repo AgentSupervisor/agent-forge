@@ -57,16 +57,21 @@ class MediaHandler:
             staged_paths.append(f".media/{dest_name}")
 
         elif media_type == MediaType.VIDEO:
-            # Extract keyframes
+            # Stage original video file
+            dest_name = f"{timestamp}_{source.name}"
+            dest = media_dir / dest_name
+            shutil.copy2(source_path, dest)
+            staged_paths.append(f".media/{dest_name}")
+            # Also extract keyframes for visual context
             frame_dir = self.temp_dir / f"frames_{timestamp}"
             frame_dir.mkdir(exist_ok=True)
             frames = await self._extract_video_frames(source_path, str(frame_dir))
             for frame_path in frames:
                 frame_file = Path(frame_path)
-                dest_name = f"{timestamp}_{frame_file.name}"
-                dest = media_dir / dest_name
-                shutil.copy2(frame_path, dest)
-                staged_paths.append(f".media/{dest_name}")
+                fname = f"{timestamp}_{frame_file.name}"
+                fdest = media_dir / fname
+                shutil.copy2(frame_path, fdest)
+                staged_paths.append(f".media/{fname}")
 
         elif media_type == MediaType.AUDIO:
             # Transcribe or save as-is
@@ -248,10 +253,14 @@ class MediaHandler:
         if media_type == MediaType.IMAGE:
             return f"I've placed design mockups/images at: {paths_str}. Please analyze them."
         elif media_type == MediaType.VIDEO:
-            return (
-                f"I've extracted keyframes from a video at: {paths_str}."
-                " These show the sequence of events."
-            )
+            video_files = [p for p in staged_paths if Path(p).suffix.lower() in VIDEO_EXTENSIONS]
+            frame_files = [p for p in staged_paths if p not in video_files]
+            parts = []
+            if video_files:
+                parts.append(f"Video file at: {', '.join(video_files)}")
+            if frame_files:
+                parts.append(f"Extracted keyframes at: {', '.join(frame_files)}")
+            return ". ".join(parts) + "."
         elif media_type == MediaType.AUDIO:
             # Check if there's a transcript
             transcripts = [p for p in staged_paths if "transcript" in p]
