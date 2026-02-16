@@ -39,13 +39,14 @@
 
         <!-- Message input bar (below terminal, like a prompt) -->
         <div
-            style="display:flex; align-items:center; gap:10px; padding:10px 16px; border-top:1px solid var(--border); background:var(--bg-surface); flex-shrink:0;">
+            style="display:flex; align-items:flex-end; gap:10px; padding:10px 16px; border-top:1px solid var(--border); background:var(--bg-surface); flex-shrink:0;">
             <span
-                style="color:var(--text-muted); font-family:'JetBrains Mono',monospace; font-size:13px; flex-shrink:0;">&#10095;</span>
-            <input type="text" x-model="messageText" placeholder="Send a message to the agent..." class="input"
-                style="flex:1; background:var(--bg-input); border-radius:6px; padding:8px 12px; font-size:13px;"
-                @keydown.enter="sendMessage()" @keydown.ctrl.enter="sendMessage()" @keydown.meta.enter="sendMessage()">
-            <button class="btn btn-primary btn-sm" @click="sendMessage()" :disabled="sending" style="flex-shrink:0;">
+                style="color:var(--text-muted); font-family:'JetBrains Mono',monospace; font-size:13px; flex-shrink:0; padding-bottom:8px;">&#10095;</span>
+            <textarea x-model="messageText" placeholder="Send a message to the agent..." class="input" rows="1"
+                style="flex:1; background:var(--bg-input); border-radius:6px; padding:8px 12px; font-size:13px; resize:none; overflow-y:hidden; max-height:150px; line-height:1.4;"
+                @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); sendMessage(); }"
+                @input="$el.style.height='auto'; $el.style.height=$el.scrollHeight+'px'"></textarea>
+            <button class="btn btn-primary btn-sm" @click="sendMessage()" :disabled="sending" style="flex-shrink:0; margin-bottom:2px;">
                 <span x-show="!sending">Send</span>
                 <span x-show="sending">...</span>
             </button>
@@ -178,7 +179,7 @@
 
                 // Auto-focus message input
                 this.$nextTick(() => {
-                    const input = document.querySelector('input[x-model="messageText"]');
+                    const input = document.querySelector('textarea[x-model="messageText"]');
                     if (input) input.focus();
                 });
 
@@ -210,6 +211,8 @@
                     });
                     if (res.ok) {
                         this.messageText = '';
+                        const ta = document.querySelector('textarea[x-model="messageText"]');
+                        if (ta) { ta.style.height = 'auto'; }
                         showToast('Message sent');
                         setTimeout(refreshTerminal, 2000);
                         loadEvents();

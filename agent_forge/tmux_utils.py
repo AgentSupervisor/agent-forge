@@ -106,17 +106,24 @@ def kill_session(name: str) -> bool:
 def send_keys(session_name: str, text: str, enter: bool = True) -> bool:
     """Send keystrokes to a tmux session.
 
-    Sends the text first, then presses Enter twice if *enter* is True.
-    Claude Code needs the second Enter to actually submit the prompt
-    (the first Enter just finalises the text line).
+    For multi-line text, each line is sent separately with Enter between them.
+    After the final line, two Enters are sent if *enter* is True: the first
+    closes the line and the second submits the prompt (Claude Code requirement).
     """
-    # Send the text content
-    result = _run(["tmux", "send-keys", "-t", session_name, text])
-    if result.returncode != 0:
-        logger.error(
-            "Failed to send keys to '%s': %s", session_name, result.stderr.strip()
-        )
-        return False
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        # Send this line's text
+        result = _run(["tmux", "send-keys", "-t", session_name, line])
+        if result.returncode != 0:
+            logger.error(
+                "Failed to send keys to '%s': %s",
+                session_name,
+                result.stderr.strip(),
+            )
+            return False
+        # Press Enter between lines (not after the last one — that's handled below)
+        if i < len(lines) - 1:
+            _run(["tmux", "send-keys", "-t", session_name, "Enter"])
     if enter:
         # Two Enters: first closes the line, second submits the prompt
         _run(["tmux", "send-keys", "-t", session_name, "Enter"])
