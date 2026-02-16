@@ -371,6 +371,15 @@
                 detailSysGpuRow.style.display = "none";
             }
         }
+
+        // --- Metrics page: forward to Alpine component ---
+
+        if (document.getElementById("metrics-page")) {
+            var metricsPageEl = document.querySelector('[x-data*="metricsPage"]');
+            if (metricsPageEl && metricsPageEl.__x && metricsPageEl.__x.$data.updateMetrics) {
+                metricsPageEl.__x.$data.updateMetrics(data);
+            }
+        }
     }
 
     // Keep connection alive with periodic pings
