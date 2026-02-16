@@ -61,6 +61,7 @@ class BaseConnector(ABC):
     """Abstract base class for IM connectors."""
 
     connector_type: ConnectorType
+    CHUNK_LIMIT: int = 4096
 
     def __init__(self, connector_id: str, config: dict[str, Any]) -> None:
         self.connector_id = connector_id
@@ -101,6 +102,54 @@ class BaseConnector(ABC):
     @abstractmethod
     async def health_check(self) -> dict[str, Any]:
         """Return connector health status."""
+
+    def _chunk_text(self, text: str) -> list[str]:
+        """Split text into chunks that fit within CHUNK_LIMIT.
+
+        Smart splitting prefers: paragraph breaks > line breaks > sentence ends > hard split.
+        Adds chunk indicators [1/N] when multi-part.
+        """
+        limit = self.CHUNK_LIMIT
+        if len(text) <= limit:
+            return [text]
+
+        indicator_reserve = 8
+        effective_limit = limit - indicator_reserve
+
+        chunks: list[str] = []
+        remaining = text
+
+        while remaining:
+            if len(remaining) <= effective_limit:
+                chunks.append(remaining)
+                break
+
+            split_pos = self._find_split_point(remaining, effective_limit)
+            chunks.append(remaining[:split_pos].rstrip())
+            remaining = remaining[split_pos:].lstrip()
+
+        if len(chunks) > 1:
+            total = len(chunks)
+            chunks = [f"{chunk} [{i+1}/{total}]" for i, chunk in enumerate(chunks)]
+
+        return chunks
+
+    @staticmethod
+    def _find_split_point(text: str, limit: int) -> int:
+        """Find the best split point within limit chars."""
+        pos = text.rfind("\n\n", 0, limit)
+        if pos > limit // 4:
+            return pos + 2
+
+        pos = text.rfind("\n", 0, limit)
+        if pos > limit // 4:
+            return pos + 1
+
+        pos = text.rfind(". ", 0, limit)
+        if pos > limit // 4:
+            return pos + 2
+
+        return limit
 
     async def send_test_message(self, channel_id: str) -> dict[str, Any]:
         """Send a test message to a channel. Returns result dict."""

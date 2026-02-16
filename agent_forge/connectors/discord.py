@@ -18,6 +18,7 @@ class DiscordConnector(BaseConnector):
     """Discord bot connector using discord.py."""
 
     connector_type = ConnectorType.DISCORD
+    CHUNK_LIMIT = 2000
 
     def __init__(self, connector_id: str, config: dict[str, Any]) -> None:
         super().__init__(connector_id, config)
@@ -269,7 +270,7 @@ class DiscordConnector(BaseConnector):
                     view.add_item(button)
 
             # Split text at 2000-char limit
-            text_chunks = self._split_message(message.text)
+            text_chunks = self._chunk_text(message.text)
 
             # Send text chunks
             for i, chunk in enumerate(text_chunks):
@@ -415,33 +416,6 @@ class DiscordConnector(BaseConnector):
 
         if is_new:
             logger.info("Tracked new channel: id=%s name='%s' type=%s", channel_id, name, channel.type)
-
-    def _split_message(self, text: str) -> list[str]:
-        """Split text at Discord's 2000-char limit, breaking at newlines when possible."""
-        if len(text) <= 2000:
-            return [text]
-
-        chunks: list[str] = []
-        remaining = text
-
-        while remaining:
-            if len(remaining) <= 2000:
-                chunks.append(remaining)
-                break
-
-            # Find last newline before 2000 chars
-            split_pos = remaining.rfind("\n", 0, 2000)
-            if split_pos == -1:
-                # No newline found, hard split at 2000
-                split_pos = 2000
-            else:
-                # Include the newline in the chunk
-                split_pos += 1
-
-            chunks.append(remaining[:split_pos])
-            remaining = remaining[split_pos:]
-
-        return chunks
 
     @staticmethod
     def _button_style(action: str) -> Any:

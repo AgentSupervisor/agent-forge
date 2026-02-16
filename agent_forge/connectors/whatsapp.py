@@ -26,6 +26,7 @@ class WhatsAppConnector(BaseConnector):
     """WhatsApp connector using a Baileys (Node.js) sidecar process with local HTTP bridge."""
 
     connector_type = ConnectorType.WHATSAPP
+    CHUNK_LIMIT = 4096
 
     def __init__(self, connector_id: str, config: dict[str, Any]) -> None:
         super().__init__(connector_id, config)
@@ -115,26 +116,26 @@ class WhatsAppConnector(BaseConnector):
         try:
             jid = self._channel_id_to_jid(message.channel_id)
 
-            # Build payload with text and optional buttons
-            payload: dict[str, Any] = {
-                "jid": jid,
-                "text": message.text,
-            }
-
             # Add action buttons if present (max 3)
             buttons: list[ActionButton] = message.extra.get("action_buttons", [])
-            if buttons:
-                payload["buttons"] = [
-                    {
-                        "id": f"ctrl:{btn.agent_id}:{btn.action}",
-                        "text": btn.label,
-                    }
-                    for btn in buttons[:3]
-                ]
 
-            # Send text message (with optional buttons)
-            resp = await self._http_client.post("/send", json=payload)
-            resp.raise_for_status()
+            # Chunk text and send
+            chunks = self._chunk_text(message.text)
+            for i, chunk in enumerate(chunks):
+                payload: dict[str, Any] = {
+                    "jid": jid,
+                    "text": chunk,
+                }
+                if buttons and i == len(chunks) - 1:
+                    payload["buttons"] = [
+                        {
+                            "id": f"ctrl:{btn.agent_id}:{btn.action}",
+                            "text": btn.label,
+                        }
+                        for btn in buttons[:3]
+                    ]
+                resp = await self._http_client.post("/send", json=payload)
+                resp.raise_for_status()
 
             # Send media files separately
             for media_path in message.media_paths:

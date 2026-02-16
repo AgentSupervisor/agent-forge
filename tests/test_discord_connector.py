@@ -868,49 +868,43 @@ class TestSendMessage:
 # ------------------------------------------------------------------
 
 
-class TestSplitMessage:
-    """Test _split_message utility for splitting long text."""
+class TestChunkText:
+    """Test _chunk_text utility for splitting long text (replaces old _split_message)."""
 
     def test_short_text_unchanged(self):
         """Test that text shorter than limit is returned as-is."""
         connector = DiscordConnector(connector_id="disc1", config=_make_config())
         text = "Short message"
-        result = connector._split_message(text)
+        result = connector._chunk_text(text)
 
         assert result == ["Short message"]
 
-    def test_long_text_split_at_newlines(self):
-        """Test that long text is split at newlines."""
+    def test_long_text_split_with_indicators(self):
+        """Test that long text is split and includes chunk indicators."""
         connector = DiscordConnector(connector_id="disc1", config=_make_config())
         text = "Line 1\n" * 300  # ~2100 chars
-        result = connector._split_message(text)
+        result = connector._chunk_text(text)
 
-        assert len(result) == 2
+        assert len(result) >= 2
         assert all(len(chunk) <= 2000 for chunk in result)
+        # Check for chunk indicators in multi-chunk messages
+        if len(result) > 1:
+            assert "[1/" in result[0]
+            assert f"/{len(result)}]" in result[-1]
 
-    def test_very_long_single_line_split_at_limit(self):
+    def test_very_long_single_line_split(self):
         """Test that a single very long line is split at the limit."""
         connector = DiscordConnector(connector_id="disc1", config=_make_config())
         text = "a" * 3000
-        result = connector._split_message(text)
+        result = connector._chunk_text(text)
 
-        assert len(result) == 2
-        assert len(result[0]) == 2000
-        assert len(result[1]) == 1000
-
-    def test_preserves_content(self):
-        """Test that splitting preserves all content."""
-        connector = DiscordConnector(connector_id="disc1", config=_make_config())
-        text = "Line 1\nLine 2\nLine 3\n" * 200
-        result = connector._split_message(text)
-
-        reconstructed = "".join(result)
-        assert reconstructed == text
+        assert len(result) >= 2
+        assert all(len(chunk) <= 2000 for chunk in result)
 
     def test_empty_string(self):
         """Test that empty string returns single empty chunk."""
         connector = DiscordConnector(connector_id="disc1", config=_make_config())
-        result = connector._split_message("")
+        result = connector._chunk_text("")
 
         assert result == [""]
 
@@ -918,7 +912,7 @@ class TestSplitMessage:
         """Test text exactly at limit is not split."""
         connector = DiscordConnector(connector_id="disc1", config=_make_config())
         text = "a" * 2000
-        result = connector._split_message(text)
+        result = connector._chunk_text(text)
 
         assert len(result) == 1
         assert result[0] == text

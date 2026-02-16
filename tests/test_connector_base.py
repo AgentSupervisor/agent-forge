@@ -158,3 +158,144 @@ class TestBaseConnector:
 
         conn.set_message_callback(callback)
         assert conn._message_callback is callback
+
+
+class TestMessageChunking:
+    """Tests for BaseConnector._chunk_text and _find_split_point methods."""
+
+    @staticmethod
+    def _create_test_connector(chunk_limit: int = 50):
+        """Create a concrete connector for testing with a small chunk limit."""
+
+        class TestConnector(BaseConnector):
+            connector_type = ConnectorType.TELEGRAM
+            CHUNK_LIMIT = chunk_limit
+
+            async def start(self):
+                pass
+
+            async def stop(self):
+                pass
+
+            async def send_message(self, message):
+                return True
+
+            async def validate_channel(self, channel_id):
+                return True
+
+            async def get_channel_info(self, channel_id):
+                return {}
+
+            async def list_channels(self):
+                return []
+
+            async def health_check(self):
+                return {"connected": True}
+
+        return TestConnector("test-id", {})
+
+    def test_short_text_no_chunking(self):
+        """Text under limit returns single item."""
+        conn = self._create_test_connector(chunk_limit=100)
+        text = "Short message"
+        chunks = conn._chunk_text(text)
+        assert len(chunks) == 1
+        assert chunks[0] == "Short message"
+
+    def test_splits_at_paragraph_breaks(self):
+        """Prefer splitting at paragraph breaks (\\n\\n)."""
+        conn = self._create_test_connector(chunk_limit=50)
+        text = "First paragraph here.\n\nSecond paragraph starts now."
+        chunks = conn._chunk_text(text)
+        assert len(chunks) == 2
+        assert "First paragraph" in chunks[0]
+        assert "Second paragraph" in chunks[1]
+        assert "[1/2]" in chunks[0]
+        assert "[2/2]" in chunks[1]
+
+    def test_splits_at_line_breaks(self):
+        """Use line breaks (\\n) when no paragraph break available."""
+        conn = self._create_test_connector(chunk_limit=50)
+        text = "First line here with more text.\nSecond line starts."
+        chunks = conn._chunk_text(text)
+        assert len(chunks) == 2
+        assert "First line" in chunks[0]
+        assert "Second line" in chunks[1]
+
+    def test_splits_at_sentence_ends(self):
+        """Use sentence ends (. ) when no line break available."""
+        conn = self._create_test_connector(chunk_limit=50)
+        text = "First sentence goes here. Second sentence starts now and continues."
+        chunks = conn._chunk_text(text)
+        assert len(chunks) == 2
+        assert "First sentence" in chunks[0]
+        assert "Second sentence" in chunks[1]
+
+    def test_hard_split(self):
+        """Fall back to hard split at limit when no natural break."""
+        conn = self._create_test_connector(chunk_limit=50)
+        text = "A" * 100  # No natural breaks
+        chunks = conn._chunk_text(text)
+        assert len(chunks) == 3
+        # First two chunks should be about 42 chars (50 - 8 for indicator reserve)
+        assert len(chunks[0]) <= 50
+        assert len(chunks[1]) <= 50
+        assert "[1/3]" in chunks[0]
+        assert "[3/3]" in chunks[2]
+
+    def test_chunk_indicators_added(self):
+        """Multi-chunk messages get [1/N] indicators."""
+        conn = self._create_test_connector(chunk_limit=50)
+        text = "Part one with enough text to split.\n\nPart two with enough text to split.\n\nPart three with enough text to split."
+        chunks = conn._chunk_text(text)
+        assert len(chunks) >= 2  # At least 2 chunks
+        # Check that indicators are present
+        assert "[1/" in chunks[0]
+        assert f"/{len(chunks)}]" in chunks[-1]
+
+    def test_empty_text(self):
+        """Empty string returns single empty chunk."""
+        conn = self._create_test_connector(chunk_limit=100)
+        chunks = conn._chunk_text("")
+        assert len(chunks) == 1
+        assert chunks[0] == ""
+
+    def test_find_split_point_paragraph_break(self):
+        """_find_split_point prefers paragraph breaks."""
+        text = "Some text here.\n\nMore text after paragraph break."
+        pos = BaseConnector._find_split_point(text, 30)
+        # Should split after the "\n\n" which is at position 17
+        assert pos == 17  # position after "\n\n"
+        assert text[:pos] == "Some text here.\n\n"
+
+    def test_find_split_point_line_break(self):
+        """_find_split_point uses line breaks when no paragraph break."""
+        text = "First line here.\nSecond line starts now."
+        pos = BaseConnector._find_split_point(text, 30)
+        # Should split after the "\n" which is at position 17
+        assert pos == 17  # position after "\n"
+        assert text[:pos] == "First line here.\n"
+
+    def test_find_split_point_sentence_end(self):
+        """_find_split_point uses sentence ends when no line breaks."""
+        text = "First sentence. Second sentence here."
+        pos = BaseConnector._find_split_point(text, 30)
+        # Should split after ". " which is at position 16
+        assert pos == 16  # position after ". "
+        assert text[:pos] == "First sentence. "
+
+    def test_find_split_point_hard_split(self):
+        """_find_split_point falls back to limit when no natural break."""
+        text = "A" * 100
+        pos = BaseConnector._find_split_point(text, 50)
+        assert pos == 50
+
+    def test_find_split_point_respects_quarter_threshold(self):
+        """Split points before limit//4 are rejected."""
+        conn = self._create_test_connector(chunk_limit=100)
+        # Put a paragraph break very early (before 1/4 mark at 25)
+        text = "A\n\n" + "B" * 100
+        pos = BaseConnector._find_split_point(text, 100)
+        # Should not use the early paragraph break at position 3
+        # Should fall back to hard split at 100
+        assert pos == 100
