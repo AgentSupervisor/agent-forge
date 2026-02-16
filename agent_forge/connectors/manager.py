@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import shutil
+from pathlib import Path
 from typing import Any
 
 from .base import ActionButton, BaseConnector, ConnectorType, InboundMessage, OutboundMessage
@@ -200,18 +202,32 @@ class ConnectorManager:
             if len(bindings) == 1:
                 project_name = bindings[0][0]
             elif len(bindings) > 1:
-                # Multiple projects bound — need @project prefix
+                # Multiple projects bound — try @project prefix first
                 project_name, agent_id, text = self._parse_target(msg.text)
                 if project_name:
                     msg.text = text
                 else:
-                    projects = ", ".join(b[0] for b in bindings)
-                    await self._reply(
-                        msg,
-                        f"Multiple projects bound to this channel: {projects}\n"
-                        "Use @project message to specify.",
-                    )
-                    return
+                    # Fall back to sticky context (e.g. replying to an agent message)
+                    ctx_agent_id = self._get_context(msg.connector_id, msg.channel_id)
+                    if ctx_agent_id:
+                        agent = self.agent_manager.get_agent(ctx_agent_id)
+                        if agent:
+                            project_name = agent.project_name
+                            agent_id = ctx_agent_id
+                    # Also check if the connector extracted an agent_id (e.g. from a reply)
+                    if not project_name and msg.agent_id:
+                        agent = self.agent_manager.get_agent(msg.agent_id)
+                        if agent:
+                            project_name = agent.project_name
+                            agent_id = msg.agent_id
+                    if not project_name:
+                        projects = ", ".join(b[0] for b in bindings)
+                        await self._reply(
+                            msg,
+                            f"Multiple projects bound to this channel: {projects}\n"
+                            "Use @project message to specify.",
+                        )
+                        return
             else:
                 # No channel binding — try @project prefix
                 project_name, agent_id, text = self._parse_target(msg.text)
@@ -258,22 +274,34 @@ class ConnectorManager:
             if msg.media_paths and self.media_handler:
                 try:
                     staged = []
+                    last_media_type = None
                     for media_path in msg.media_paths:
-                        result = await self.media_handler.process_and_stage(
+                        paths, media_type = await self.media_handler.process_and_stage(
                             source_path=media_path,
-                            worktree_path=agent.worktree_path,
+                            agent_worktree=agent.worktree_path,
                         )
-                        staged.extend(result)
+                        staged.extend(paths)
+                        last_media_type = media_type
                     if staged:
+                        media_context = ""
+                        if last_media_type is not None:
+                            media_context = self.media_handler.build_media_reference(
+                                staged, last_media_type
+                            )
                         # Send media references after the start sequence finishes
                         async def _send_media_refs(
-                            aid: str = agent.id, paths: list[str] = staged
+                            aid: str = agent.id,
+                            ctx: str = media_context,
+                            paths: list[str] = staged,
                         ) -> None:
                             await asyncio.sleep(5.0)
-                            refs = "\n".join(f"  - {p}" for p in paths)
-                            await self.agent_manager.send_message(
-                                aid, f"Media files staged:\n{refs}"
-                            )
+                            if ctx:
+                                await self.agent_manager.send_message(aid, ctx)
+                            else:
+                                refs = "\n".join(f"  - {p}" for p in paths)
+                                await self.agent_manager.send_message(
+                                    aid, f"Media files staged:\n{refs}"
+                                )
 
                         asyncio.ensure_future(_send_media_refs())
                     file_list = "\n".join(f"  - {p}" for p in staged)
@@ -299,16 +327,26 @@ class ConnectorManager:
 
         # Send message to an existing agent (with or without media)
         if msg.media_paths and self.media_handler:
+            temp_paths = list(msg.media_paths)
             try:
-                staged = []
+                staged: list[str] = []
+                last_media_type = None
                 for media_path in msg.media_paths:
-                    result = await self.media_handler.process_and_stage(
+                    paths, media_type = await self.media_handler.process_and_stage(
                         source_path=media_path,
-                        worktree_path=agent.worktree_path,
+                        agent_worktree=agent.worktree_path,
                     )
-                    staged.extend(result)
+                    staged.extend(paths)
+                    last_media_type = media_type
+
+                media_context = ""
+                if staged and last_media_type is not None:
+                    media_context = self.media_handler.build_media_reference(
+                        staged, last_media_type
+                    )
+
                 await self.agent_manager.send_message_with_media(
-                    agent.id, msg.text, staged
+                    agent.id, msg.text, staged, media_context=media_context
                 )
                 file_list = "\n".join(f"  - {p}" for p in staged)
                 await self._reply(msg, f"Staged to `{agent.id}` ({project_name}):\n{file_list}")
@@ -317,6 +355,19 @@ class ConnectorManager:
             except Exception:
                 logger.exception("Failed to process media message")
                 await self._reply(msg, "Failed to process media attachment.")
+            finally:
+                # Clean up connector temp files
+                for temp_path in temp_paths:
+                    try:
+                        p = Path(temp_path)
+                        if p.exists():
+                            p.unlink()
+                            # Remove parent dir if it's a forge temp dir and now empty
+                            parent = p.parent
+                            if parent.name.startswith("forge_") and not any(parent.iterdir()):
+                                parent.rmdir()
+                    except OSError:
+                        logger.debug("Failed to clean up temp file: %s", temp_path)
         else:
             success = await self.agent_manager.send_message(agent.id, msg.text)
             if success:
@@ -559,13 +610,14 @@ class ConnectorManager:
                     continue
                 connector = self.connectors.get(binding.connector_id)
                 if not connector:
+                    logger.warning("Connector %s not found for outbound to %s", binding.connector_id, project_name)
                     continue
                 out = OutboundMessage(channel_id=binding.channel_id, text=text)
                 try:
                     await connector.send_message(out)
                     sent.add((binding.connector_id, binding.channel_id))
                 except Exception:
-                    logger.debug(
+                    logger.exception(
                         "Failed to send outbound to %s/%s",
                         binding.connector_id,
                         binding.channel_id,
@@ -695,7 +747,7 @@ class ConnectorManager:
         """
         import re
 
-        match = re.match(r"^@([\w-]+)(?::([\w-]+))?\s+(.*)", text, re.DOTALL)
+        match = re.match(r"^@([\w-]+)(?::([\w-]+))?[:\s]\s*(.*)", text, re.DOTALL)
         if not match:
             return "", "", ""
         project_name = match.group(1)

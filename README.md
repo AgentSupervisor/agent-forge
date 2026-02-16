@@ -62,6 +62,7 @@ Each agent runs in its own tmux session with a dedicated git worktree, so agents
 | tmux | Yes | `brew install tmux` / `apt install tmux` |
 | git | Yes | |
 | Claude Code CLI | Yes | `npm install -g @anthropic-ai/claude-code` |
+| Node.js 18+ | No | Required for WhatsApp connector (Baileys sidecar) |
 | ffmpeg | No | For video/media handling |
 
 ### Quick Install
@@ -84,7 +85,8 @@ pip install -e .
 # Optional: IM connector support
 pip install -e ".[telegram]"   # Telegram (python-telegram-bot)
 pip install -e ".[discord]"    # Discord (discord.py)
-pip install -e ".[slack]"      # Slack (slack-bolt)
+pip install -e ".[slack]"      # Slack (slack-bolt + httpx)
+pip install -e ".[whatsapp]"   # WhatsApp (httpx — also requires Node.js for Baileys sidecar)
 ```
 
 ---
@@ -180,14 +182,20 @@ Agent Forge supports multiple IM platforms through its connector system. Configu
 | Platform | Library | Status |
 |---|---|---|
 | **Telegram** | `python-telegram-bot>=21.0` | Full support |
-| **Discord** | `discord.py>=2.3` | Stub (coming soon) |
-| **Slack** | `slack-bolt>=1.18` | Stub (coming soon) |
-| **WhatsApp** | Baileys (Node.js sidecar) | Stub (coming soon) |
-| **Signal** | signal-cli (subprocess) | Stub (coming soon) |
+| **Discord** | `discord.py>=2.3` | Full support |
+| **Slack** | `slack-bolt>=1.18` + `httpx` | Full support |
+| **WhatsApp** | Baileys (Node.js sidecar) + `httpx` | Full support |
+| **Signal** | signal-cli (subprocess) | Planned |
 
-Each project can bind to specific channels across different connectors. When a channel is bound to exactly one project, messages are auto-routed without needing the `@project` prefix.
+All connectors share the same abstract base class and support a unified feature set:
 
-**Commands** (supported on all connectors):
+- **Message routing** — `@project message` or `@project:agent_id message` prefix to target agents
+- **Reply-to routing** — Reply to a bot message to route to that agent automatically
+- **Channel bindings** — Bind channels to projects for auto-routing without prefixes
+- **Sticky context** — Channels remember the last-interacted agent for convenient follow-ups
+- **Media handling** — Attach images, videos, audio, or documents — they're downloaded and staged in the agent's worktree
+- **Interactive buttons** — Approve, reject, interrupt, and other controls rendered as platform-native buttons
+- **Commands** — Uniform command set across all platforms:
 
 | Command | Description |
 |---|---|
@@ -195,10 +203,21 @@ Each project can bind to specific channels across different connectors. When a c
 | `/projects` | List registered projects |
 | `/spawn project [task]` | Spawn a new agent |
 | `/kill agent_id` | Kill an agent |
+| `/approve`, `/reject`, `/interrupt` | Agent control commands |
 | `@project message` | Send message to most recent agent in project |
 | `@project:agent_id message` | Send to a specific agent |
 
-Attach images, videos, audio, or documents to any message — they'll be processed and staged in the agent's worktree.
+#### Connector-specific notes
+
+**Telegram** — Polling-based. Supports inline keyboard buttons, per-user allow lists, and chat persistence for channel enumeration.
+
+**Discord** — Runs as a background asyncio task on the FastAPI event loop. Supports guild filtering, `discord.ui.View` buttons with color-coded styles, and automatic message splitting at the 2000-character limit.
+
+**Slack** — Uses Socket Mode for real-time events (requires both a bot token and an app token). Renders controls as Block Kit action buttons. File downloads use authenticated `httpx` requests.
+
+**WhatsApp** — Runs a Node.js Baileys sidecar process that emulates WhatsApp Web. The Python connector communicates with the sidecar over a local HTTP API (configurable port, default 3100). Requires Node.js and `npm install` in the sidecar directory. Session auth is persisted at `~/.agent-forge/whatsapp_sessions/`. Supports up to 3 buttons per message (WhatsApp platform limit).
+
+**Signal** — Not yet implemented. Planned to use `signal-cli daemon --json` for receiving and `signal-cli send` for sending.
 
 **Per-project channel bindings** allow you to control which channels receive agent status notifications (outbound) and which channels can send commands to agents (inbound).
 
@@ -227,6 +246,24 @@ connectors:
     enabled: true
     credentials:
       bot_token: "MTIz..."
+    settings:
+      guild_ids: []      # Empty = all guilds
+      allowed_users: []
+  team-slack:
+    type: slack
+    enabled: true
+    credentials:
+      bot_token: "xoxb-..."
+      app_token: "xapp-..."   # Required for Socket Mode
+    settings:
+      allowed_users: []
+  my-whatsapp:
+    type: whatsapp
+    enabled: true
+    credentials:
+      phone_number: "15551234567"
+    settings:
+      sidecar_port: 3100
 
 defaults:
   max_agents_per_project: 5

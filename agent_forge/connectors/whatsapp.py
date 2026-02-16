@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 
-from .base import ActionButton, BaseConnector, ConnectorType, InboundMessage, OutboundMessage
+from .base import ActionButton, BaseConnector, ConnectorType, InboundMessage, OutboundMessage, extract_agent_from_text
 
 logger = logging.getLogger(__name__)
 
@@ -330,11 +330,16 @@ class WhatsAppConnector(BaseConnector):
         # Handle media
         media_paths: list[str] = []
         if data.get("media"):
+            from .base import ensure_extension
+
             media_info = data["media"]
             src = Path(media_info["path"])
             if src.exists():
                 tmp_dir = tempfile.mkdtemp(prefix="forge_wa_media_")
-                dest = Path(tmp_dir) / (media_info.get("filename") or src.name)
+                file_name = media_info.get("filename") or src.name
+                content_type = media_info.get("mimetype", "")
+                file_name = ensure_extension(file_name, content_type)
+                dest = Path(tmp_dir) / file_name
                 shutil.copy2(str(src), str(dest))
                 media_paths.append(str(dest))
 
@@ -378,8 +383,14 @@ class WhatsAppConnector(BaseConnector):
         # Handle regular text with optional routing
         project_name, agent_id = self._parse_routing(text)
         if project_name:
-            match = re.match(r"^@[\w-]+(?::[\w-]+)?\s+(.*)", text, re.DOTALL)
+            match = re.match(r"^@[\w-]+(?::[\w-]+)?[:\s]\s*(.*)", text, re.DOTALL)
             text = match.group(1).strip() if match else text
+
+        # Extract agent_id from quoted (replied-to) bot message
+        if not agent_id:
+            quoted_text = data.get("quotedMessage", {}).get("text", "")
+            if quoted_text:
+                agent_id = extract_agent_from_text(quoted_text)
 
         msg = InboundMessage(
             connector_id=self.connector_id,
@@ -412,7 +423,7 @@ class WhatsAppConnector(BaseConnector):
     @staticmethod
     def _parse_routing(text: str) -> tuple[str, str]:
         """Extract @project[:agent_id] from text. Returns (project, agent_id)."""
-        match = re.match(r"^@([\w-]+)(?::([\w-]+))?\s", text)
+        match = re.match(r"^@([\w-]+)(?::([\w-]+))?[:\s]", text)
         if not match:
             return "", ""
         return match.group(1), match.group(2) or ""

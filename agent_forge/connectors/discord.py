@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .base import ActionButton, BaseConnector, ConnectorType, InboundMessage, OutboundMessage
+from .base import ActionButton, BaseConnector, ConnectorType, InboundMessage, OutboundMessage, extract_agent_from_text
 
 logger = logging.getLogger(__name__)
 
@@ -176,8 +176,12 @@ class DiscordConnector(BaseConnector):
         project_name, agent_id = self._parse_routing(text)
         if project_name:
             # Strip the @project[:agent] prefix from the text
-            match = re.match(r"^@[\w-]+(?::[\w-]+)?\s+(.*)", text, re.DOTALL)
+            match = re.match(r"^@[\w-]+(?::[\w-]+)?[:\s]\s*(.*)", text, re.DOTALL)
             text = match.group(1).strip() if match else text
+
+        # Extract agent_id from replied-to bot message
+        if not agent_id:
+            agent_id = await self._extract_reply_agent(message)
 
         # Build inbound message
         msg = InboundMessage(
@@ -391,10 +395,24 @@ class DiscordConnector(BaseConnector):
             return True
         return user_id in self.allowed_users
 
+    async def _extract_reply_agent(self, message: Any) -> str:
+        """Extract agent_id from a replied-to bot message, if any."""
+        if not message.reference or not self._client:
+            return ""
+        try:
+            replied = message.reference.resolved
+            if replied is None:
+                replied = await message.channel.fetch_message(message.reference.message_id)
+            if replied and replied.author == self._client.user:
+                return extract_agent_from_text(replied.content or "")
+        except Exception:
+            pass
+        return ""
+
     @staticmethod
     def _parse_routing(text: str) -> tuple[str, str]:
         """Extract @project[:agent_id] from text. Returns (project, agent_id)."""
-        match = re.match(r"^@([\w-]+)(?::([\w-]+))?\s", text)
+        match = re.match(r"^@([\w-]+)(?::([\w-]+))?[:\s]", text)
         if not match:
             return "", ""
         return match.group(1), match.group(2) or ""
@@ -433,12 +451,16 @@ class DiscordConnector(BaseConnector):
 
     async def _download_attachments(self, attachments: list[Any]) -> list[str]:
         """Download Discord attachments to temp files."""
+        from .base import ensure_extension
+
         media_paths: list[str] = []
 
         for attachment in attachments:
             try:
                 tmp_dir = tempfile.mkdtemp(prefix="forge_media_")
                 file_name = attachment.filename or "attachment"
+                content_type = getattr(attachment, "content_type", "") or ""
+                file_name = ensure_extension(file_name, content_type)
                 tmp_path = Path(tmp_dir) / file_name
 
                 await attachment.save(tmp_path)

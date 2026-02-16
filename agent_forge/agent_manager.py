@@ -526,14 +526,18 @@ class AgentManager:
         agent_id: str,
         message: str,
         media_paths: list[str],
+        media_context: str = "",
     ) -> bool:
         """Send a message that references media files staged in the worktree."""
         agent = self.agents.get(agent_id)
         if not agent:
             return False
 
-        media_refs = ", ".join(media_paths)
-        full_message = f"{message}\n\nReferenced files: {media_refs}"
+        if media_context:
+            full_message = f"{message}\n\n{media_context}"
+        else:
+            media_refs = ", ".join(media_paths)
+            full_message = f"{message}\n\nReferenced files: {media_refs}"
         return await self.send_message(agent_id, full_message)
 
     async def send_control(self, agent_id: str, action: str) -> bool:
