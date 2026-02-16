@@ -12,6 +12,14 @@
     let reconnectDelay = 1000;
     const MAX_DELAY = 30000;
 
+    // Track previous statuses for change detection
+    const previousStatuses = {};
+
+    // Request notification permission on load
+    if ("Notification" in window && Notification.permission === "default") {
+        Notification.requestPermission();
+    }
+
     function getWsUrl() {
         const proto = location.protocol === "https:" ? "wss:" : "ws:";
         return proto + "//" + location.host + "/ws";
@@ -84,9 +92,41 @@
         stopped: "var(--status-stopped)",
     };
 
+    function maybeDesktopNotify(data) {
+        if (!("Notification" in window) || Notification.permission !== "granted") return;
+        if (document.visibilityState === "visible") return;
+
+        var aid = data.agent_id;
+        var status = data.status;
+        var prev = previousStatuses[aid];
+
+        // Same condition as IM connector: notify on state change unless new state is "working"
+        if (prev === undefined || prev === status || status === "working") return;
+
+        var label = (status || "idle").replace("_", " ");
+        var project = data.project || "";
+        var title = "Agent " + aid + (project ? " (" + project + ")" : "");
+        var body = prev.replace("_", " ") + " → " + label;
+        if (status === "waiting_input") {
+            body = "Waiting for input";
+            if (data.task) body += ": " + data.task;
+        }
+
+        var n = new Notification(title, { body: body, tag: "agent-" + aid });
+        n.onclick = function () {
+            window.focus();
+            window.location.href = "/agents/" + aid;
+            n.close();
+        };
+    }
+
     function handleAgentUpdate(data) {
         var aid = data.agent_id;
         var status = data.status;
+
+        // Desktop notification on state change (before updating tracked status)
+        maybeDesktopNotify(data);
+        previousStatuses[aid] = status;
 
         // --- Dashboard card updates ---
 
