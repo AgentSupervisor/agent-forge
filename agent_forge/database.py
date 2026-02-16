@@ -32,7 +32,9 @@ CREATE TABLE IF NOT EXISTS agent_snapshots (
     task_description TEXT,
     created_at TEXT NOT NULL,
     last_activity TEXT NOT NULL,
-    last_output TEXT
+    last_output TEXT,
+    needs_attention INTEGER NOT NULL DEFAULT 0,
+    parked INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_agent ON events(agent_id);
@@ -47,8 +49,27 @@ async def init_db(path: str = "agent_forge.db") -> aiosqlite.Connection:
     db.row_factory = aiosqlite.Row
     await db.executescript(SCHEMA)
     await db.commit()
+    # Migrate existing tables: add new columns if missing
+    await _migrate_add_columns(db)
     logger.info("Database initialised at %s", path)
     return db
+
+
+async def _migrate_add_columns(db: aiosqlite.Connection) -> None:
+    """Add columns introduced after initial schema (idempotent)."""
+    cursor = await db.execute("PRAGMA table_info(agent_snapshots)")
+    existing = {row[1] for row in await cursor.fetchall()}
+    migrations = [
+        ("needs_attention", "INTEGER NOT NULL DEFAULT 0"),
+        ("parked", "INTEGER NOT NULL DEFAULT 0"),
+    ]
+    for col_name, col_def in migrations:
+        if col_name not in existing:
+            await db.execute(
+                f"ALTER TABLE agent_snapshots ADD COLUMN {col_name} {col_def}"
+            )
+            logger.info("Migrated agent_snapshots: added column %s", col_name)
+    await db.commit()
 
 
 async def log_event(
@@ -111,8 +132,9 @@ async def save_snapshot(db: aiosqlite.Connection, agent: Agent) -> None:
     await db.execute(
         """INSERT OR REPLACE INTO agent_snapshots
            (agent_id, project_name, session_name, worktree_path, branch_name,
-            status, task_description, created_at, last_activity, last_output)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            status, task_description, created_at, last_activity, last_output,
+            needs_attention, parked)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             agent.id,
             agent.project_name,
@@ -124,6 +146,8 @@ async def save_snapshot(db: aiosqlite.Connection, agent: Agent) -> None:
             agent.created_at.isoformat(),
             agent.last_activity.isoformat(),
             agent.last_output[-5000:] if agent.last_output else "",
+            int(agent.needs_attention),
+            int(agent.parked),
         ),
     )
     await db.commit()

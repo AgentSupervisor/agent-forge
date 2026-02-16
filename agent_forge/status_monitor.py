@@ -104,6 +104,8 @@ class StatusMonitor:
             if not tmux_utils.session_exists(agent.session_name):
                 old_status = agent.status
                 agent.status = AgentStatus.STOPPED
+                agent.needs_attention = True
+                agent.parked = False
                 if old_status != AgentStatus.STOPPED and self.db:
                     await log_event(
                         self.db, agent.id, agent.project_name,
@@ -123,6 +125,14 @@ class StatusMonitor:
                 if new_status != agent.status:
                     old_status = agent.status
                     agent.status = new_status
+
+                    # Set attention flags based on status transitions
+                    if new_status in (AgentStatus.IDLE, AgentStatus.WAITING_INPUT, AgentStatus.ERROR):
+                        agent.needs_attention = True
+                        agent.parked = False
+                    elif new_status == AgentStatus.WORKING:
+                        agent.needs_attention = False
+
                     if self.db:
                         await log_event(
                             self.db, agent.id, agent.project_name,

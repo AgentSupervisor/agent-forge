@@ -44,6 +44,8 @@ class Agent:
     task_description: str = ""
     sub_agent_count: int = 0
     profile: str = ""
+    needs_attention: bool = False
+    parked: bool = False
     output_log_path: str = ""
     last_relay_offset: int = 0
 
