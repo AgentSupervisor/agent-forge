@@ -17,6 +17,7 @@ class TelegramConnector(BaseConnector):
     """Telegram bot connector using python-telegram-bot polling."""
 
     connector_type = ConnectorType.TELEGRAM
+    CHUNK_LIMIT = 4096
 
     def __init__(self, connector_id: str, config: dict[str, Any]) -> None:
         super().__init__(connector_id, config)
@@ -133,12 +134,15 @@ class TelegramConnector(BaseConnector):
                 ]
                 reply_markup = InlineKeyboardMarkup([keyboard])
 
-            await self._bot.send_message(
-                chat_id=message.channel_id,
-                text=message.text,
-                parse_mode=message.parse_mode or None,
-                reply_markup=reply_markup,
-            )
+            chunks = self._chunk_text(message.text)
+            for i, chunk in enumerate(chunks):
+                chunk_markup = reply_markup if i == len(chunks) - 1 else None
+                await self._bot.send_message(
+                    chat_id=message.channel_id,
+                    text=chunk,
+                    parse_mode=message.parse_mode or None,
+                    reply_markup=chunk_markup,
+                )
             for path in message.media_paths:
                 with open(path, "rb") as f:
                     await self._bot.send_document(chat_id=message.channel_id, document=f)
