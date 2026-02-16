@@ -469,3 +469,46 @@ class TestComparisonMode:
         """spawn_comparison with empty profiles list raises ValueError."""
         with pytest.raises(ValueError, match="At least one profile"):
             await manager.spawn_comparison("test-project", "task", [])
+
+
+class TestAttentionFields:
+    """Tests for needs_attention and parked Agent fields."""
+
+    def test_defaults(self):
+        agent = Agent(
+            id="abc123",
+            project_name="test",
+            session_name="forge__test__abc123",
+            worktree_path="/tmp/wt",
+            branch_name="agent/abc123/task",
+        )
+        assert agent.needs_attention is False
+        assert agent.parked is False
+
+    def test_explicit_values(self):
+        agent = Agent(
+            id="abc123",
+            project_name="test",
+            session_name="forge__test__abc123",
+            worktree_path="/tmp/wt",
+            branch_name="agent/abc123/task",
+            needs_attention=True,
+            parked=True,
+        )
+        assert agent.needs_attention is True
+        assert agent.parked is True
+
+    def test_mutation(self):
+        agent = Agent(
+            id="abc123",
+            project_name="test",
+            session_name="forge__test__abc123",
+            worktree_path="/tmp/wt",
+            branch_name="agent/abc123/task",
+        )
+        agent.needs_attention = True
+        agent.parked = True
+        assert agent.needs_attention is True
+        assert agent.parked is True
+        agent.needs_attention = False
+        assert agent.needs_attention is False

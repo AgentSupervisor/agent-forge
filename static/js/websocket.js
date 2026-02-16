@@ -125,6 +125,20 @@
             }
         }
 
+        // Update attention glow
+        if (card) {
+            if (data.needs_attention) {
+                card.classList.add("attention");
+            } else {
+                card.classList.remove("attention");
+            }
+            if (data.parked) {
+                card.classList.add("parked");
+            } else {
+                card.classList.remove("parked");
+            }
+        }
+
         // --- Agent detail page updates ---
 
         if (window.currentAgentId === aid) {

@@ -3,6 +3,10 @@
 {% block nav_home %}active{% endblock %}
 
 {% block content %}
+<style>
+.agent-card.attention { box-shadow: 0 0 0 2px var(--status-waiting); }
+.agent-card.parked { opacity: 0.5; }
+</style>
 <div x-data="dashboard()" x-init="init()" @open-spawn-modal.window="spawnModalOpen = true">
 
     <!-- Header bar -->
@@ -36,6 +40,10 @@
             <span class="stat-dot" style="background:var(--status-starting);"></span>
             <span class="stat-value" id="stat-starting">0</span>
         </div>
+        <div class="stat-item" id="stat-attention-item" style="display:none;">
+            <span style="color:var(--status-waiting);font-size:14px;">&#128276;</span>
+            <span class="stat-value" id="stat-attention">0</span>
+        </div>
         <div style="flex:1;"></div>
         <button class="btn btn-primary btn-sm" @click="spawnModalOpen = true">
             + Spawn Agent <span class="kbd" style="margin-left:6px;">&#8984;K</span>
@@ -48,7 +56,7 @@
             <h2 style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); margin-bottom:12px;">Agents</h2>
         <div id="agent-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5">
             {% for agent in agents %}
-            <div class="agent-card" id="card-{{ agent.id }}" onclick="window.location='/agent/{{ agent.id }}'">
+            <div class="agent-card{% if agent.needs_attention %} attention{% endif %}{% if agent.parked %} parked{% endif %}" id="card-{{ agent.id }}" onclick="window.location='/agent/{{ agent.id }}'">
                 <div class="card-status-bar" style="background:
                     {% if agent.status.value == 'working' %}var(--status-working)
                     {% elif agent.status.value == 'waiting_input' %}var(--status-waiting)
@@ -86,6 +94,14 @@
                 </div>
                 <div class="card-actions" onclick="event.stopPropagation();">
                     <button class="btn btn-ghost btn-xs" onclick="window.location='/agent/' + '{{ agent.id }}'">View</button>
+                    {% if agent.needs_attention %}
+                    <button class="btn btn-ghost btn-xs" onclick="ackAgent('{{ agent.id }}')" title="Acknowledge">Ack</button>
+                    {% endif %}
+                    {% if not agent.parked %}
+                    <button class="btn btn-ghost btn-xs" onclick="parkAgent('{{ agent.id }}')" title="Park">Park</button>
+                    {% else %}
+                    <button class="btn btn-ghost btn-xs" onclick="unparkAgent('{{ agent.id }}')" title="Unpark">Unpark</button>
+                    {% endif %}
                     <button class="btn btn-danger btn-xs" onclick="killAgent('{{ agent.id }}')">Kill</button>
                 </div>
             </div>
@@ -202,6 +218,13 @@ function dashboard() {
                     const s = el('stat-' + status);
                     if (s) s.textContent = count;
                 }
+                const attentionCount = data.needs_attention_count || 0;
+                const attentionItem = el('stat-attention-item');
+                const attentionValue = el('stat-attention');
+                if (attentionItem && attentionValue) {
+                    attentionValue.textContent = attentionCount;
+                    attentionItem.style.display = attentionCount > 0 ? 'flex' : 'none';
+                }
             } catch (e) { /* silent */ }
         },
 
@@ -297,8 +320,15 @@ function addAgentCard(a) {
     if (empty) empty.remove();
     const grid = document.getElementById('agent-grid');
     const statusLabel = (a.status || 'starting').replace('_', ' ');
+    const cardClasses = ['agent-card'];
+    if (a.needs_attention) cardClasses.push('attention');
+    if (a.parked) cardClasses.push('parked');
+    const ackBtn = a.needs_attention ? `<button class="btn btn-ghost btn-xs" onclick="ackAgent('${a.id}')" title="Acknowledge">Ack</button>` : '';
+    const parkBtn = a.parked
+        ? `<button class="btn btn-ghost btn-xs" onclick="unparkAgent('${a.id}')" title="Unpark">Unpark</button>`
+        : `<button class="btn btn-ghost btn-xs" onclick="parkAgent('${a.id}')" title="Park">Park</button>`;
     grid.insertAdjacentHTML('beforeend', `
-        <div class="agent-card" id="card-${a.id}" onclick="window.location='/agent/${a.id}'">
+        <div class="${cardClasses.join(' ')}" id="card-${a.id}" onclick="window.location='/agent/${a.id}'">
             <div class="card-status-bar" style="background:${STATUS_COLORS[a.status] || STATUS_COLORS.starting};"></div>
             <div class="card-header">
                 <div style="display:flex;align-items:center;gap:10px;">
@@ -328,6 +358,8 @@ function addAgentCard(a) {
             </div>
             <div class="card-actions" onclick="event.stopPropagation();">
                 <button class="btn btn-ghost btn-xs" onclick="window.location='/agent/${a.id}'">View</button>
+                ${ackBtn}
+                ${parkBtn}
                 <button class="btn btn-danger btn-xs" onclick="killAgent('${a.id}')">Kill</button>
             </div>
         </div>
@@ -344,6 +376,57 @@ async function killAgent(agentId) {
             showToast('Agent ' + agentId + ' killed');
         } else {
             const detail = await res.json().then(d => d.detail || 'Failed to kill agent').catch(() => res.statusText);
+            showToast(detail, true);
+        }
+    } catch (e) {
+        showToast('Error: ' + e.message, true);
+    }
+}
+
+async function ackAgent(agentId) {
+    try {
+        const res = await fetch('/api/agents/' + agentId + '/acknowledge', { method: 'POST' });
+        if (res.ok) {
+            const card = document.getElementById('card-' + agentId);
+            if (card) card.classList.remove('attention');
+            showToast('Agent ' + agentId + ' acknowledged');
+        } else {
+            const detail = await res.json().then(d => d.detail || 'Failed to acknowledge agent').catch(() => res.statusText);
+            showToast(detail, true);
+        }
+    } catch (e) {
+        showToast('Error: ' + e.message, true);
+    }
+}
+
+async function parkAgent(agentId) {
+    try {
+        const res = await fetch('/api/agents/' + agentId + '/park', { method: 'POST' });
+        if (res.ok) {
+            const card = document.getElementById('card-' + agentId);
+            if (card) {
+                card.classList.add('parked');
+                card.classList.remove('attention');
+            }
+            showToast('Agent ' + agentId + ' parked');
+        } else {
+            const detail = await res.json().then(d => d.detail || 'Failed to park agent').catch(() => res.statusText);
+            showToast(detail, true);
+        }
+    } catch (e) {
+        showToast('Error: ' + e.message, true);
+    }
+}
+
+async function unparkAgent(agentId) {
+    try {
+        const res = await fetch('/api/agents/' + agentId + '/unpark', { method: 'POST' });
+        if (res.ok) {
+            const card = document.getElementById('card-' + agentId);
+            if (card) card.classList.remove('parked');
+            showToast('Agent ' + agentId + ' unparked');
+        } else {
+            const detail = await res.json().then(d => d.detail || 'Failed to unpark agent').catch(() => res.statusText);
             showToast(detail, true);
         }
     } catch (e) {

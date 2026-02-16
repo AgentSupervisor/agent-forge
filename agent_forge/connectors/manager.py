@@ -472,6 +472,7 @@ class ConnectorManager:
                 "  /spawn <project> [task] — Spawn a new agent\n"
                 "  /kill <agent_id> — Terminate an agent\n"
                 "  /projects — List available projects\n"
+                "  /attention — List agents needing attention\n"
                 "\n"
                 "AGENT CONTROL\n"
                 "  /approve [agent_id] — Approve a pending action\n"
@@ -581,6 +582,24 @@ class ConnectorManager:
                 self._set_context(msg.connector_id, msg.channel_id, agent_id)
             else:
                 await self._reply(msg, f"Failed to send `{cmd}` to agent `{agent_id}`.")
+
+        elif cmd == "attention":
+            agents = self.agent_manager.list_agents()
+            needing = [a for a in agents if a.needs_attention]
+            if not needing:
+                await self._reply(msg, "No agents need attention.")
+                return
+            # Group by project
+            grouped: dict[str, list] = {}
+            for a in needing:
+                grouped.setdefault(a.project_name, []).append(a)
+            lines: list[str] = ["Agents needing attention:"]
+            for project, project_agents in sorted(grouped.items()):
+                lines.append(f"  {project}:")
+                for a in project_agents:
+                    task = f' — "{a.task_description}"' if a.task_description else ""
+                    lines.append(f"    - {a.id}: {a.status.value}{task}")
+            await self._reply(msg, "\n".join(lines))
 
         else:
             await self._reply(msg, f"Unknown command: /{cmd}")

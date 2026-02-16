@@ -62,6 +62,7 @@ MOCK_AGENTS: list[dict] = [
         "profile": "",
         "sub_agent_count": 0,
         "minutes_ago": 18,
+        "needs_attention": True,
     },
     {
         "id": "7a8b9c",
@@ -71,6 +72,7 @@ MOCK_AGENTS: list[dict] = [
         "profile": "tester",
         "sub_agent_count": 0,
         "minutes_ago": 95,
+        "needs_attention": True,
     },
     {
         "id": "fe0d1c",
@@ -99,6 +101,7 @@ MOCK_AGENTS: list[dict] = [
         "profile": "",
         "sub_agent_count": 0,
         "minutes_ago": 55,
+        "needs_attention": True,
     },
     {
         "id": "9b0c1d",
@@ -127,6 +130,7 @@ MOCK_AGENTS: list[dict] = [
         "profile": "",
         "sub_agent_count": 0,
         "minutes_ago": 33,
+        "needs_attention": True,
     },
     {
         "id": "8e9f0a",
@@ -136,6 +140,7 @@ MOCK_AGENTS: list[dict] = [
         "profile": "tester",
         "sub_agent_count": 0,
         "minutes_ago": 75,
+        "parked": True,
     },
     # --- project: data-pipeline (2 agents) ---
     {
@@ -195,5 +200,7 @@ def populate_mock_agents(manager: AgentManager) -> None:
             task_description=m["task_description"],
             sub_agent_count=m["sub_agent_count"],
             profile=m["profile"],
+            needs_attention=m.get("needs_attention", False),
+            parked=m.get("parked", False),
         )
         manager.agents[agent.id] = agent
