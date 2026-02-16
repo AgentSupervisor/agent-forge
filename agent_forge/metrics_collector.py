@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import time
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,8 @@ if TYPE_CHECKING:
     from .agent_manager import Agent, AgentManager
 
 logger = logging.getLogger(__name__)
+
+TMUX_TIMEOUT = 5
 
 
 class SystemMetrics(BaseModel):
@@ -61,6 +64,9 @@ class MetricsCollector:
         self.gpu_available = False
         self.gpu_handle = None
         self._last_net_io: tuple[float, float, float] | None = None  # (timestamp, bytes_sent, bytes_recv)
+        # Cache psutil.Process objects keyed by PID so cpu_percent(interval=0)
+        # has a prior measurement and returns meaningful values on the second call.
+        self._proc_cache: dict[int, psutil.Process] = {}
 
         if enable_gpu:
             self._init_gpu()
@@ -168,36 +174,48 @@ class MetricsCollector:
             gpu_temperature=gpu_temperature,
         )
 
+    @staticmethod
+    def _get_pane_pid(session_name: str) -> int | None:
+        """Get the root process PID for a tmux session's pane."""
+        try:
+            result = subprocess.run(
+                ["tmux", "list-panes", "-t", session_name, "-F", "#{pane_pid}"],
+                capture_output=True, text=True, timeout=TMUX_TIMEOUT,
+            )
+            if result.returncode != 0:
+                return None
+            # Take the first pane's PID
+            pid_str = result.stdout.strip().splitlines()[0]
+            return int(pid_str)
+        except (subprocess.TimeoutExpired, FileNotFoundError, ValueError, IndexError):
+            return None
+
+    def _get_or_cache_proc(self, pid: int) -> psutil.Process | None:
+        """Get a cached Process object, or create and warm up a new one."""
+        proc = self._proc_cache.get(pid)
+        if proc is not None:
+            try:
+                proc.status()  # verify still alive
+                return proc
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                del self._proc_cache[pid]
+        try:
+            proc = psutil.Process(pid)
+            # Warm-up call so the next cpu_percent(interval=0) returns real data
+            proc.cpu_percent(interval=0)
+            self._proc_cache[pid] = proc
+            return proc
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return None
+
     def collect_agent(self, agent: Agent) -> AgentMetrics | None:
         """Collect resource metrics for a single agent.
 
-        Finds processes matching the agent's session_name via psutil,
-        collects children recursively, and aggregates CPU/memory usage.
+        Uses tmux list-panes to get the pane's root PID, then walks
+        the process tree via psutil to aggregate CPU/memory usage.
         """
-        session_name = agent.session_name
-        matching_pids: set[int] = set()
-
-        # Find processes whose cmdline contains the session_name
-        try:
-            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-                try:
-                    cmdline = proc.info.get('cmdline') or []
-                    if any(session_name in arg for arg in cmdline):
-                        matching_pids.add(proc.info['pid'])
-                        # Collect children recursively
-                        try:
-                            p = psutil.Process(proc.info['pid'])
-                            for child in p.children(recursive=True):
-                                matching_pids.add(child.pid)
-                        except (psutil.NoSuchProcess, psutil.AccessDenied):
-                            pass
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
-        except Exception:
-            logger.debug("Failed to enumerate processes for agent %s", agent.id, exc_info=True)
-            return None
-
-        if not matching_pids:
+        pane_pid = self._get_pane_pid(agent.session_name)
+        if pane_pid is None:
             return AgentMetrics(
                 agent_id=agent.id,
                 process_count=0,
@@ -205,21 +223,31 @@ class MetricsCollector:
                 memory_mb=0.0,
             )
 
-        # Aggregate metrics
+        # Collect the pane root process and all its descendants
+        all_pids: set[int] = {pane_pid}
+        try:
+            root = psutil.Process(pane_pid)
+            for child in root.children(recursive=True):
+                all_pids.add(child.pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+        # Aggregate metrics using cached Process objects
         total_cpu = 0.0
         total_memory = 0.0
         process_count = 0
 
-        for pid in matching_pids:
+        for pid in all_pids:
+            proc = self._get_or_cache_proc(pid)
+            if proc is None:
+                continue
             try:
-                p = psutil.Process(pid)
-                # Use interval=0 for non-blocking per-process CPU
-                total_cpu += p.cpu_percent(interval=0)
-                mem_info = p.memory_info()
+                total_cpu += proc.cpu_percent(interval=0)
+                mem_info = proc.memory_info()
                 total_memory += mem_info.rss / (1024 * 1024)  # MB
                 process_count += 1
             except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
+                self._proc_cache.pop(pid, None)
 
         return AgentMetrics(
             agent_id=agent.id,

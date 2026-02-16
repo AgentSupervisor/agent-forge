@@ -757,7 +757,7 @@ select.input {
     stroke-linecap: round;
     transition: stroke-dashoffset 0.5s ease, stroke 0.3s ease;
     stroke-dasharray: 283;
-    stroke-dashoffset: calc(283 - (283 * var(--percent) / 100));
+    stroke-dashoffset: 283;
 }
 
 .gauge-fill.gauge-low { stroke: var(--status-working); }
