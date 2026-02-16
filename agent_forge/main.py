@@ -197,6 +197,8 @@ def _agent_to_dict(agent) -> dict:
         "task_description": agent.task_description,
         "sub_agent_count": agent.sub_agent_count,
         "profile": agent.profile,
+        "needs_attention": agent.needs_attention,
+        "parked": agent.parked,
     }
 
 
@@ -442,6 +444,8 @@ async def api_send_message(request: Request, agent_id: str):
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
+    agent.needs_attention = False
+
     try:
         body = await request.json()
     except Exception:
@@ -467,6 +471,8 @@ async def api_send_control(request: Request, agent_id: str):
     agent = mgr.get_agent(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+
+    agent.needs_attention = False
 
     try:
         body = await request.json()
@@ -533,6 +539,37 @@ async def api_agent_events(request: Request, agent_id: str, limit: int = 100):
     return events
 
 
+@app.post("/api/agents/{agent_id}/acknowledge")
+async def api_acknowledge_agent(request: Request, agent_id: str):
+    mgr: AgentManager = request.app.state.agent_manager
+    agent = mgr.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    agent.needs_attention = False
+    return {"status": "acknowledged", "agent_id": agent_id}
+
+
+@app.post("/api/agents/{agent_id}/park")
+async def api_park_agent(request: Request, agent_id: str):
+    mgr: AgentManager = request.app.state.agent_manager
+    agent = mgr.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    agent.parked = True
+    agent.needs_attention = False
+    return {"status": "parked", "agent_id": agent_id}
+
+
+@app.post("/api/agents/{agent_id}/unpark")
+async def api_unpark_agent(request: Request, agent_id: str):
+    mgr: AgentManager = request.app.state.agent_manager
+    agent = mgr.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    agent.parked = False
+    return {"status": "unparked", "agent_id": agent_id}
+
+
 # ---------------------------------------------------------------------------
 # JSON API — Stats
 # ---------------------------------------------------------------------------
@@ -545,13 +582,17 @@ async def api_stats(request: Request):
     from .agent_manager import AgentStatus
     counts = {s.value: 0 for s in AgentStatus}
     total_sub_agents = 0
+    needs_attention_count = 0
     for a in agents:
         counts[a.status.value] = counts.get(a.status.value, 0) + 1
         total_sub_agents += a.sub_agent_count
+        if a.needs_attention:
+            needs_attention_count += 1
     return {
         "total": len(agents),
         "by_status": counts,
         "total_sub_agents": total_sub_agents,
+        "needs_attention_count": needs_attention_count,
     }
 
 

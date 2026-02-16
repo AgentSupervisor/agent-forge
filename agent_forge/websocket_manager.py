@@ -53,6 +53,8 @@ class WebSocketManager:
             "last_activity": agent.last_activity.isoformat(),
             "task": agent.task_description,
             "sub_agent_count": agent.sub_agent_count,
+            "needs_attention": agent.needs_attention,
+            "parked": agent.parked,
         })
 
     async def broadcast_terminal_output(self, agent_id: str, output: str) -> None:
