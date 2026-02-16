@@ -372,13 +372,10 @@
             }
         }
 
-        // --- Metrics page: forward to Alpine component ---
+        // --- Metrics page: forward via custom event ---
 
         if (document.getElementById("metrics-page")) {
-            var metricsPageEl = document.querySelector('[x-data*="metricsPage"]');
-            if (metricsPageEl && metricsPageEl.__x && metricsPageEl.__x.$data.updateMetrics) {
-                metricsPageEl.__x.$data.updateMetrics(data);
-            }
+            window.dispatchEvent(new CustomEvent("metrics-update", { detail: data }));
         }
     }
 

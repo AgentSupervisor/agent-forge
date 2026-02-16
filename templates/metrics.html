@@ -3,7 +3,7 @@
 {% block nav_metrics %}active{% endblock %}
 
 {% block content %}
-<div x-data="metricsPage()" x-init="init()" id="metrics-page">
+<div x-data="metricsPage()" x-init="init()" @metrics-update.window="updateMetrics($event.detail)" id="metrics-page">
 
     <!-- Header bar -->
     <div class="stats-bar">
@@ -33,7 +33,7 @@
                     <div class="metric-gauge-ring">
                         <svg viewBox="0 0 100 100" class="gauge-svg">
                             <circle cx="50" cy="50" r="45" class="gauge-bg"></circle>
-                            <circle cx="50" cy="50" r="45" class="gauge-fill" id="gauge-cpu" style="--percent: 0;"></circle>
+                            <circle cx="50" cy="50" r="45" class="gauge-fill" id="gauge-cpu"></circle>
                         </svg>
                         <div class="gauge-center">
                             <span class="gauge-value" id="gauge-cpu-val">0%</span>
@@ -64,7 +64,7 @@
                     <div class="metric-gauge-ring">
                         <svg viewBox="0 0 100 100" class="gauge-svg">
                             <circle cx="50" cy="50" r="45" class="gauge-bg"></circle>
-                            <circle cx="50" cy="50" r="45" class="gauge-fill" id="gauge-mem" style="--percent: 0;"></circle>
+                            <circle cx="50" cy="50" r="45" class="gauge-fill" id="gauge-mem"></circle>
                         </svg>
                         <div class="gauge-center">
                             <span class="gauge-value" id="gauge-mem-val">0%</span>
@@ -79,6 +79,10 @@
                             <span>Total</span>
                             <span id="metric-mem-total">--</span>
                         </div>
+                        <div class="metric-detail-row">
+                            <span>Agents</span>
+                            <span id="metric-mem-agents">--</span>
+                        </div>
                     </div>
                 </div>
 
@@ -91,7 +95,7 @@
                     <div class="metric-gauge-ring">
                         <svg viewBox="0 0 100 100" class="gauge-svg">
                             <circle cx="50" cy="50" r="45" class="gauge-bg"></circle>
-                            <circle cx="50" cy="50" r="45" class="gauge-fill" id="gauge-disk" style="--percent: 0;"></circle>
+                            <circle cx="50" cy="50" r="45" class="gauge-fill" id="gauge-disk"></circle>
                         </svg>
                         <div class="gauge-center">
                             <span class="gauge-value" id="gauge-disk-val">0%</span>
@@ -141,7 +145,7 @@
                     <div class="metric-gauge-ring">
                         <svg viewBox="0 0 100 100" class="gauge-svg">
                             <circle cx="50" cy="50" r="45" class="gauge-bg"></circle>
-                            <circle cx="50" cy="50" r="45" class="gauge-fill" id="gauge-gpu" style="--percent: 0;"></circle>
+                            <circle cx="50" cy="50" r="45" class="gauge-fill" id="gauge-gpu"></circle>
                         </svg>
                         <div class="gauge-center">
                             <span class="gauge-value" id="gauge-gpu-val">0%</span>
@@ -213,250 +217,243 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script>
 function metricsPage() {
+    // Keep Chart.js instances and history arrays outside Alpine's reactive proxy.
+    // Alpine v3 wraps returned properties in a Proxy which breaks Chart.js internals.
+    var _cpuChart = null;
+    var _memChart = null;
+    var _cpuHistory = [];
+    var _memHistory = [];
+    var _maxDataPoints = 60;
+
+    function _initCharts() {
+        var chartConfig = {
+            type: 'line',
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: false,
+                plugins: {
+                    legend: { display: false },
+                },
+                scales: {
+                    x: { display: false },
+                    y: {
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {
+                            color: 'rgba(139, 149, 165, 0.8)',
+                            callback: function (v) { return v + '%'; },
+                        },
+                        grid: { color: 'rgba(40, 45, 56, 0.5)' },
+                    },
+                },
+            },
+        };
+
+        _cpuChart = new Chart(document.getElementById('chart-cpu'), {
+            type: chartConfig.type,
+            options: chartConfig.options,
+            data: {
+                labels: [],
+                datasets: [{
+                    data: [],
+                    borderColor: 'rgb(99, 102, 241)',
+                    backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                    borderWidth: 2,
+                    tension: 0.3,
+                    fill: true,
+                }],
+            },
+        });
+
+        _memChart = new Chart(document.getElementById('chart-mem'), {
+            type: chartConfig.type,
+            options: chartConfig.options,
+            data: {
+                labels: [],
+                datasets: [{
+                    data: [],
+                    borderColor: 'rgb(16, 185, 129)',
+                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                    borderWidth: 2,
+                    tension: 0.3,
+                    fill: true,
+                }],
+            },
+        });
+    }
+
+    function _addDataPoint(type, value) {
+        var history = type === 'cpu' ? _cpuHistory : _memHistory;
+        var chart = type === 'cpu' ? _cpuChart : _memChart;
+        if (!chart) return;
+
+        history.push(value);
+        if (history.length > _maxDataPoints) {
+            history.shift();
+        }
+
+        chart.data.labels = history.map(function (_, i) { return i; });
+        chart.data.datasets[0].data = history.slice();
+        chart.update('none');
+    }
+
+    function _updateGauge(id, percent) {
+        var gauge = document.getElementById(id);
+        if (!gauge) return;
+        // Set stroke-dashoffset directly — CSS calc() with var() is unreliable on SVG
+        var offset = 283 - (283 * percent / 100);
+        gauge.style.strokeDashoffset = offset;
+        gauge.classList.remove('gauge-low', 'gauge-medium', 'gauge-high');
+        if (percent >= 80) {
+            gauge.classList.add('gauge-high');
+        } else if (percent >= 50) {
+            gauge.classList.add('gauge-medium');
+        } else {
+            gauge.classList.add('gauge-low');
+        }
+    }
+
     return {
-        cpuHistory: [],
-        memHistory: [],
-        cpuChart: null,
-        memChart: null,
-        maxDataPoints: 60,
-
         init() {
-            this.initCharts();
-            this.loadInitialData();
-        },
-
-        initCharts() {
-            const chartConfig = {
-                type: 'line',
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    animation: false,
-                    plugins: {
-                        legend: { display: false },
-                    },
-                    scales: {
-                        x: {
-                            display: false,
-                        },
-                        y: {
-                            beginAtZero: true,
-                            max: 100,
-                            ticks: {
-                                color: 'rgba(139, 149, 165, 0.8)',
-                                callback: (value) => value + '%',
-                            },
-                            grid: {
-                                color: 'rgba(40, 45, 56, 0.5)',
-                            },
-                        },
-                    },
-                },
-            };
-
-            // CPU Chart
-            this.cpuChart = new Chart(document.getElementById('chart-cpu'), {
-                ...chartConfig,
-                data: {
-                    labels: [],
-                    datasets: [{
-                        data: [],
-                        borderColor: 'rgb(99, 102, 241)',
-                        backgroundColor: 'rgba(99, 102, 241, 0.1)',
-                        borderWidth: 2,
-                        tension: 0.3,
-                        fill: true,
-                    }],
-                },
-            });
-
-            // Memory Chart
-            this.memChart = new Chart(document.getElementById('chart-mem'), {
-                ...chartConfig,
-                data: {
-                    labels: [],
-                    datasets: [{
-                        data: [],
-                        borderColor: 'rgb(16, 185, 129)',
-                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                        borderWidth: 2,
-                        tension: 0.3,
-                        fill: true,
-                    }],
-                },
-            });
-        },
-
-        async loadInitialData() {
-            try {
-                const res = await fetch('/api/metrics');
-                if (res.ok) {
-                    const data = await res.json();
-                    this.updateMetrics({ system: data.system, agents: data.agents });
-                }
-            } catch (e) {
-                console.error('Failed to load initial metrics:', e);
-            }
+            _initCharts();
+            // Load initial snapshot from REST API
+            fetch('/api/metrics')
+                .then(function (res) { return res.ok ? res.json() : null; })
+                .then(function (data) {
+                    if (data) _updatePage({ system: data.system, agents: data.agents });
+                })
+                .catch(function (e) { console.error('Failed to load initial metrics:', e); });
         },
 
         updateMetrics(data) {
-            const sys = data.system || {};
-            const agents = data.agents || {};
-
-            // Update last update timestamp
-            const now = new Date();
-            document.getElementById('metrics-last-update').textContent =
-                'Last update: ' + now.toLocaleTimeString();
-
-            // --- CPU ---
-            if (sys.cpu_percent !== undefined && sys.cpu_percent !== null) {
-                document.getElementById('metric-cpu-percent').textContent = sys.cpu_percent.toFixed(1) + '%';
-                document.getElementById('gauge-cpu-val').textContent = sys.cpu_percent.toFixed(0) + '%';
-                this.updateGauge('gauge-cpu', sys.cpu_percent);
-                this.addDataPoint('cpu', sys.cpu_percent);
-            }
-            if (sys.load_avg_1min !== undefined && sys.load_avg_1min !== null) {
-                document.getElementById('metric-cpu-load1').textContent = sys.load_avg_1min.toFixed(2);
-            }
-            if (sys.load_avg_5min !== undefined && sys.load_avg_5min !== null) {
-                document.getElementById('metric-cpu-load5').textContent = sys.load_avg_5min.toFixed(2);
-            }
-            if (sys.load_avg_15min !== undefined && sys.load_avg_15min !== null) {
-                document.getElementById('metric-cpu-load15').textContent = sys.load_avg_15min.toFixed(2);
-            }
-
-            // --- Memory ---
-            if (sys.memory_percent !== undefined && sys.memory_percent !== null) {
-                document.getElementById('metric-mem-percent').textContent = sys.memory_percent.toFixed(1) + '%';
-                document.getElementById('gauge-mem-val').textContent = sys.memory_percent.toFixed(0) + '%';
-                this.updateGauge('gauge-mem', sys.memory_percent);
-                this.addDataPoint('mem', sys.memory_percent);
-            }
-            if (sys.memory_used_mb !== undefined && sys.memory_total_mb !== undefined) {
-                const usedGb = (sys.memory_used_mb / 1024).toFixed(1);
-                const totalGb = (sys.memory_total_mb / 1024).toFixed(1);
-                document.getElementById('metric-mem-used').textContent = usedGb + ' GB';
-                document.getElementById('metric-mem-total').textContent = totalGb + ' GB';
-            }
-
-            // --- Disk ---
-            if (sys.disk_percent !== undefined && sys.disk_percent !== null) {
-                document.getElementById('metric-disk-percent').textContent = sys.disk_percent.toFixed(1) + '%';
-                document.getElementById('gauge-disk-val').textContent = sys.disk_percent.toFixed(0) + '%';
-                this.updateGauge('gauge-disk', sys.disk_percent);
-            }
-            if (sys.disk_used_gb !== undefined && sys.disk_total_gb !== undefined) {
-                document.getElementById('metric-disk-used').textContent = sys.disk_used_gb.toFixed(1) + ' GB';
-                document.getElementById('metric-disk-total').textContent = sys.disk_total_gb.toFixed(1) + ' GB';
-            }
-
-            // --- Network ---
-            if (sys.network_sent_mbps !== undefined && sys.network_recv_mbps !== undefined) {
-                const sent = sys.network_sent_mbps !== null ? sys.network_sent_mbps.toFixed(2) : '0.00';
-                const recv = sys.network_recv_mbps !== null ? sys.network_recv_mbps.toFixed(2) : '0.00';
-                document.getElementById('metric-net-up').textContent = sent + ' MB/s';
-                document.getElementById('metric-net-down').textContent = recv + ' MB/s';
-            }
-
-            // --- GPU (show/hide) ---
-            const gpuCard = document.getElementById('metric-gpu-card');
-            if (sys.gpu_utilization !== null && sys.gpu_utilization !== undefined) {
-                gpuCard.style.display = 'block';
-                document.getElementById('metric-gpu-percent').textContent = sys.gpu_utilization.toFixed(1) + '%';
-                document.getElementById('gauge-gpu-val').textContent = sys.gpu_utilization.toFixed(0) + '%';
-                this.updateGauge('gauge-gpu', sys.gpu_utilization);
-                if (sys.gpu_name) {
-                    document.getElementById('metric-gpu-name').textContent = sys.gpu_name;
-                }
-                if (sys.gpu_memory_used_mb !== null && sys.gpu_memory_total_mb !== null) {
-                    const memPct = (sys.gpu_memory_used_mb / sys.gpu_memory_total_mb * 100).toFixed(1);
-                    document.getElementById('metric-gpu-mem').textContent = memPct + '%';
-                }
-                if (sys.gpu_temperature !== null && sys.gpu_temperature !== undefined) {
-                    document.getElementById('metric-gpu-temp').textContent = sys.gpu_temperature.toFixed(0) + '°C';
-                }
-            } else {
-                gpuCard.style.display = 'none';
-            }
-
-            // --- Per-Agent Metrics Table ---
-            this.updateAgentTable(agents);
-        },
-
-        updateGauge(id, percent) {
-            const gauge = document.getElementById(id);
-            if (!gauge) return;
-            gauge.style.setProperty('--percent', percent);
-            // Update color based on threshold
-            gauge.classList.remove('gauge-low', 'gauge-medium', 'gauge-high');
-            if (percent >= 80) {
-                gauge.classList.add('gauge-high');
-            } else if (percent >= 50) {
-                gauge.classList.add('gauge-medium');
-            } else {
-                gauge.classList.add('gauge-low');
-            }
-        },
-
-        addDataPoint(type, value) {
-            const history = type === 'cpu' ? this.cpuHistory : this.memHistory;
-            const chart = type === 'cpu' ? this.cpuChart : this.memChart;
-
-            history.push(value);
-            if (history.length > this.maxDataPoints) {
-                history.shift();
-            }
-
-            chart.data.labels = history.map((_, i) => i);
-            chart.data.datasets[0].data = [...history];
-            chart.update('none');
-        },
-
-        updateAgentTable(agentsData) {
-            const tbody = document.getElementById('agent-metrics-tbody');
-            if (!agentsData || Object.keys(agentsData).length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:32px;">No agent metrics available</td></tr>';
-                return;
-            }
-
-            // Fetch agent list to get full info
-            fetch('/api/agents')
-                .then(res => res.json())
-                .then(agents => {
-                    const rows = [];
-                    for (const aid in agentsData) {
-                        const metrics = agentsData[aid];
-                        const agent = agents.find(a => a.id === aid);
-                        if (!agent) continue;
-
-                        const statusClass = agent.status;
-                        const statusLabel = agent.status.replace('_', ' ');
-                        const cpuPct = metrics.cpu_percent !== undefined && metrics.cpu_percent !== null
-                            ? metrics.cpu_percent.toFixed(1) + '%'
-                            : '--';
-                        const memMb = metrics.memory_mb !== undefined && metrics.memory_mb !== null
-                            ? metrics.memory_mb.toFixed(0) + ' MB'
-                            : '--';
-                        const procCount = metrics.process_count || '--';
-
-                        rows.push(`
-                            <tr onclick="window.location='/agent/${aid}'" style="cursor:pointer;">
-                                <td><span style="font-family:monospace;font-size:13px;">${aid}</span></td>
-                                <td>${agent.project_name}</td>
-                                <td><span class="status-badge ${statusClass}">${statusLabel}</span></td>
-                                <td style="font-variant-numeric:tabular-nums;">${cpuPct}</td>
-                                <td style="font-variant-numeric:tabular-nums;">${memMb}</td>
-                                <td style="font-variant-numeric:tabular-nums;">${procCount}</td>
-                            </tr>
-                        `);
-                    }
-                    tbody.innerHTML = rows.join('');
-                })
-                .catch(err => {
-                    console.error('Failed to fetch agents:', err);
-                });
+            _updatePage(data);
         },
     };
+
+    function _updatePage(data) {
+        var sys = data.system || {};
+        var agents = data.agents || {};
+
+        // Timestamp
+        document.getElementById('metrics-last-update').textContent =
+            'Last update: ' + new Date().toLocaleTimeString();
+
+        // --- CPU ---
+        if (sys.cpu_percent != null) {
+            document.getElementById('metric-cpu-percent').textContent = sys.cpu_percent.toFixed(1) + '%';
+            document.getElementById('gauge-cpu-val').textContent = sys.cpu_percent.toFixed(0) + '%';
+            _updateGauge('gauge-cpu', sys.cpu_percent);
+            _addDataPoint('cpu', sys.cpu_percent);
+        }
+        if (sys.load_avg_1min != null) {
+            document.getElementById('metric-cpu-load1').textContent = sys.load_avg_1min.toFixed(2);
+        }
+        if (sys.load_avg_5min != null) {
+            document.getElementById('metric-cpu-load5').textContent = sys.load_avg_5min.toFixed(2);
+        }
+        if (sys.load_avg_15min != null) {
+            document.getElementById('metric-cpu-load15').textContent = sys.load_avg_15min.toFixed(2);
+        }
+
+        // --- Memory ---
+        if (sys.memory_percent != null) {
+            document.getElementById('metric-mem-percent').textContent = sys.memory_percent.toFixed(1) + '%';
+            document.getElementById('gauge-mem-val').textContent = sys.memory_percent.toFixed(0) + '%';
+            _updateGauge('gauge-mem', sys.memory_percent);
+            _addDataPoint('mem', sys.memory_percent);
+        }
+        if (sys.memory_used_mb != null && sys.memory_total_mb != null) {
+            document.getElementById('metric-mem-used').textContent = (sys.memory_used_mb / 1024).toFixed(1) + ' GB';
+            document.getElementById('metric-mem-total').textContent = (sys.memory_total_mb / 1024).toFixed(1) + ' GB';
+        }
+        if (data.total_agent_memory_mb != null) {
+            var agentMem = data.total_agent_memory_mb;
+            var label = agentMem >= 1024 ? (agentMem / 1024).toFixed(1) + ' GB' : agentMem.toFixed(0) + ' MB';
+            document.getElementById('metric-mem-agents').textContent = label;
+        }
+
+        // --- Disk ---
+        if (sys.disk_percent != null) {
+            document.getElementById('metric-disk-percent').textContent = sys.disk_percent.toFixed(1) + '%';
+            document.getElementById('gauge-disk-val').textContent = sys.disk_percent.toFixed(0) + '%';
+            _updateGauge('gauge-disk', sys.disk_percent);
+        }
+        if (sys.disk_used_gb != null && sys.disk_total_gb != null) {
+            document.getElementById('metric-disk-used').textContent = sys.disk_used_gb.toFixed(1) + ' GB';
+            document.getElementById('metric-disk-total').textContent = sys.disk_total_gb.toFixed(1) + ' GB';
+        }
+
+        // --- Network ---
+        if (sys.network_sent_mbps != null && sys.network_recv_mbps != null) {
+            document.getElementById('metric-net-up').textContent = sys.network_sent_mbps.toFixed(2) + ' MB/s';
+            document.getElementById('metric-net-down').textContent = sys.network_recv_mbps.toFixed(2) + ' MB/s';
+        }
+
+        // --- GPU (show/hide) ---
+        var gpuCard = document.getElementById('metric-gpu-card');
+        if (sys.gpu_utilization != null) {
+            gpuCard.style.display = 'block';
+            document.getElementById('metric-gpu-percent').textContent = sys.gpu_utilization.toFixed(1) + '%';
+            document.getElementById('gauge-gpu-val').textContent = sys.gpu_utilization.toFixed(0) + '%';
+            _updateGauge('gauge-gpu', sys.gpu_utilization);
+            if (sys.gpu_name) {
+                document.getElementById('metric-gpu-name').textContent = sys.gpu_name;
+            }
+            if (sys.gpu_memory_used_mb != null && sys.gpu_memory_total_mb != null) {
+                document.getElementById('metric-gpu-mem').textContent =
+                    (sys.gpu_memory_used_mb / sys.gpu_memory_total_mb * 100).toFixed(1) + '%';
+            }
+            if (sys.gpu_temperature != null) {
+                document.getElementById('metric-gpu-temp').textContent = sys.gpu_temperature.toFixed(0) + '\u00B0C';
+            }
+        } else {
+            gpuCard.style.display = 'none';
+        }
+
+        // --- Per-Agent Metrics Table ---
+        _updateAgentTable(agents);
+    }
+
+    function _updateAgentTable(agentsData) {
+        var tbody = document.getElementById('agent-metrics-tbody');
+        if (!agentsData || Object.keys(agentsData).length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:32px;">No agent metrics available</td></tr>';
+            return;
+        }
+
+        fetch('/api/agents')
+            .then(function (res) { return res.json(); })
+            .then(function (agents) {
+                var rows = [];
+                for (var aid in agentsData) {
+                    var metrics = agentsData[aid];
+                    var agent = agents.find(function (a) { return a.id === aid; });
+                    if (!agent) continue;
+
+                    var statusClass = agent.status;
+                    var statusLabel = agent.status.replace('_', ' ');
+                    var cpuPct = metrics.cpu_percent != null ? metrics.cpu_percent.toFixed(1) + '%' : '--';
+                    var memMb = metrics.memory_mb != null ? metrics.memory_mb.toFixed(0) + ' MB' : '--';
+                    var procCount = metrics.process_count || '--';
+
+                    rows.push(
+                        '<tr onclick="window.location=\'/agent/' + aid + '\'" style="cursor:pointer;">' +
+                        '<td><span style="font-family:monospace;font-size:13px;">' + aid + '</span></td>' +
+                        '<td>' + agent.project_name + '</td>' +
+                        '<td><span class="status-badge ' + statusClass + '">' + statusLabel + '</span></td>' +
+                        '<td style="font-variant-numeric:tabular-nums;">' + cpuPct + '</td>' +
+                        '<td style="font-variant-numeric:tabular-nums;">' + memMb + '</td>' +
+                        '<td style="font-variant-numeric:tabular-nums;">' + procCount + '</td>' +
+                        '</tr>'
+                    );
+                }
+                tbody.innerHTML = rows.join('');
+            })
+            .catch(function (err) {
+                console.error('Failed to fetch agents:', err);
+            });
+    }
 }
 </script>
 {% endblock %}
