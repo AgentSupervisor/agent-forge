@@ -233,7 +233,7 @@ async def agent_detail(request: Request, agent_id: str):
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     from . import tmux_utils
-    terminal_output = tmux_utils.capture_pane(agent.session_name, lines=200)
+    terminal_output = tmux_utils.capture_pane(agent.session_name, lines=5000)
     return templates.TemplateResponse(
         "agent_detail.html",
         {
@@ -519,7 +519,7 @@ async def api_get_terminal(request: Request, agent_id: str):
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     from . import tmux_utils
-    output = tmux_utils.capture_pane(agent.session_name, lines=200)
+    output = tmux_utils.capture_pane(agent.session_name, lines=5000)
     return {"agent_id": agent_id, "output": output}
 
 
