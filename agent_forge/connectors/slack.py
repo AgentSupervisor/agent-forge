@@ -17,6 +17,7 @@ class SlackConnector(BaseConnector):
     """Slack bot connector using Socket Mode. Requires ``slack-bolt>=1.18``."""
 
     connector_type = ConnectorType.SLACK
+    CHUNK_LIMIT = 3000
 
     def __init__(self, connector_id: str, config: dict[str, Any]) -> None:
         super().__init__(connector_id, config)
@@ -106,11 +107,14 @@ class SlackConnector(BaseConnector):
                     },
                 ]
 
-            await self._client.chat_postMessage(
-                channel=message.channel_id,
-                text=message.text,
-                blocks=blocks,
-            )
+            chunks = self._chunk_text(message.text)
+            for i, chunk in enumerate(chunks):
+                chunk_blocks = blocks if (blocks and i == len(chunks) - 1) else None
+                await self._client.chat_postMessage(
+                    channel=message.channel_id,
+                    text=chunk,
+                    blocks=chunk_blocks,
+                )
 
             # Upload media files
             for path in message.media_paths:

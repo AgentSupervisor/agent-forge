@@ -50,6 +50,14 @@ class SummaryConfig(BaseModel):
     timeout_seconds: float = 10.0
 
 
+class ResponseRelayConfig(BaseModel):
+    enabled: bool = True
+    model: str = "claude-haiku-4-5-20251001"
+    max_tokens: int = 4000
+    timeout_seconds: float = 15.0
+    fallback_to_summary: bool = True
+
+
 class DefaultsConfig(BaseModel):
     max_agents_per_project: int = 5
     sandbox: bool = True
@@ -58,6 +66,7 @@ class DefaultsConfig(BaseModel):
     poll_interval_seconds: float = 3.0
     agent_instructions: str = ""
     summary: SummaryConfig = SummaryConfig()
+    response_relay: ResponseRelayConfig = ResponseRelayConfig()
 
 
 class SandboxConfig(BaseModel):
