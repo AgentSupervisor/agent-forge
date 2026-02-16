@@ -81,6 +81,9 @@ def create_session(name: str, working_dir: str, command: str) -> bool:
             command,
         ]
     )
+    if result.returncode == 0:
+        # Set a large scrollback buffer so users can review agent history
+        _run(["tmux", "set-option", "-t", name, "history-limit", "50000"])
     if result.returncode != 0:
         logger.error(
             "Failed to create tmux session '%s': %s", name, result.stderr.strip()

@@ -63,15 +63,16 @@ class TestBuildMediaReference:
         ref = handler.build_media_reference(
             [".media/123_photo.png"], MediaType.IMAGE
         )
-        assert "design mockups/images" in ref
+        assert "Image file" in ref
         assert ".media/123_photo.png" in ref
 
     def test_build_media_reference_video(self, handler):
         ref = handler.build_media_reference(
-            [".media/123_frame_001.png", ".media/123_frame_002.png"],
+            [".media/123_clip.mp4", ".media/123_frame_001.png", ".media/123_frame_002.png"],
             MediaType.VIDEO,
         )
-        assert "keyframes" in ref
+        assert ".media/123_clip.mp4" in ref
+        assert "keyframes" in ref.lower() or "frame" in ref.lower()
         assert ".media/123_frame_001.png" in ref
 
     def test_build_media_reference_audio_with_transcript(self, handler):
@@ -125,10 +126,11 @@ class TestProcessAndStage:
 
         with patch("agent_forge.media_handler.time") as mock_time:
             mock_time.time.return_value = 1000000
-            paths = await handler.process_and_stage(
-                str(source), MediaType.DOCUMENT, worktree
+            paths, media_type = await handler.process_and_stage(
+                str(source), worktree, MediaType.DOCUMENT
             )
 
+        assert media_type == MediaType.DOCUMENT
         assert len(paths) == 1
         assert paths[0] == ".media/1000000_report.pdf"
         # Verify file was actually copied
@@ -149,11 +151,12 @@ class TestProcessAndStage:
             ) as mock_resize,
         ):
             mock_time.time.return_value = 1000000
-            paths = await handler.process_and_stage(
-                str(source), MediaType.IMAGE, worktree
+            paths, media_type = await handler.process_and_stage(
+                str(source), worktree, MediaType.IMAGE
             )
 
         mock_resize.assert_awaited_once_with(str(source))
+        assert media_type == MediaType.IMAGE
         assert len(paths) == 1
         assert paths[0] == ".media/1000000_photo.png"
         # Verify file was actually copied
@@ -181,13 +184,16 @@ class TestProcessAndStage:
             ),
         ):
             mock_time.time.return_value = 1000000
-            paths = await handler.process_and_stage(
-                str(source), MediaType.VIDEO, worktree
+            paths, media_type = await handler.process_and_stage(
+                str(source), worktree, MediaType.VIDEO
             )
 
-        assert len(paths) == 2
+        assert media_type == MediaType.VIDEO
+        assert len(paths) == 3
+        assert ".media/1000000_clip.mp4" in paths
         assert ".media/1000000_frame_001.png" in paths
         assert ".media/1000000_frame_002.png" in paths
+        assert paths[0] == ".media/1000000_clip.mp4"  # video file listed first
 
     async def test_process_and_stage_audio_with_transcript(
         self, handler, worktree, tmp_path
@@ -204,11 +210,12 @@ class TestProcessAndStage:
             ),
         ):
             mock_time.time.return_value = 1000000
-            paths = await handler.process_and_stage(
-                str(source), MediaType.AUDIO, worktree
+            paths, media_type = await handler.process_and_stage(
+                str(source), worktree, MediaType.AUDIO
             )
 
         # Should have transcript + original audio
+        assert media_type == MediaType.AUDIO
         assert len(paths) == 2
         assert ".media/1000000_transcript.txt" in paths
         assert ".media/1000000_voice.ogg" in paths
@@ -227,13 +234,36 @@ class TestProcessAndStage:
             patch.object(handler, "_transcribe_audio", return_value=None),
         ):
             mock_time.time.return_value = 1000000
-            paths = await handler.process_and_stage(
-                str(source), MediaType.AUDIO, worktree
+            paths, media_type = await handler.process_and_stage(
+                str(source), worktree, MediaType.AUDIO
             )
 
         # Should have only the original audio (no transcript)
+        assert media_type == MediaType.AUDIO
         assert len(paths) == 1
         assert ".media/1000000_voice.ogg" in paths
+
+    async def test_process_and_stage_auto_detects_type(
+        self, handler, worktree, tmp_path
+    ):
+        """When media_type is None, auto-detect from file extension."""
+        source = tmp_path / "screenshot.png"
+        source.write_bytes(b"\x89PNG fake image data")
+
+        with (
+            patch("agent_forge.media_handler.time") as mock_time,
+            patch.object(
+                handler, "_resize_image", return_value=str(source)
+            ),
+        ):
+            mock_time.time.return_value = 1000000
+            paths, media_type = await handler.process_and_stage(
+                str(source), worktree
+            )
+
+        assert media_type == MediaType.IMAGE
+        assert len(paths) == 1
+        assert ".media/1000000_screenshot.png" in paths
 
 
 class TestExtractVideoFrames:
