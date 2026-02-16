@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from pathlib import Path
+from typing import Any
 
 import aiosqlite
 
@@ -13,6 +15,7 @@ from .agent_manager import AgentManager, AgentStatus
 from .config import ForgeConfig
 from .connectors.base import ActionButton
 from .database import log_event, save_snapshot
+from .response_extractor import extract_response, extract_response_regex
 from .summarizer import summarize_output
 from .websocket_manager import WebSocketManager
 
@@ -106,6 +109,8 @@ class StatusMonitor:
                         self.db, agent.id, agent.project_name,
                         "status_change", {"status": AgentStatus.STOPPED.value},
                     )
+                    if old_status == AgentStatus.WORKING:
+                        await self._relay_response(agent)
                     msg = f"Agent `{agent.id}` ({agent.project_name}) stopped"
                     summary = await self._get_activity_summary(
                         agent.last_output or "",
@@ -128,11 +133,14 @@ class StatusMonitor:
                             agent.id, agent.project_name, output,
                         )
                     elif new_status != AgentStatus.WORKING:
-                        msg = f"Agent `{agent.id}` ({agent.project_name}): {old_status.value} -> {new_status.value}"
-                        summary = await self._get_activity_summary(output)
-                        if summary:
-                            msg += f"\n```\n{summary}\n```"
-                        await self._notify_channels(agent.project_name, msg)
+                        if new_status == AgentStatus.IDLE and old_status == AgentStatus.WORKING:
+                            await self._relay_response(agent)
+                        else:
+                            msg = f"Agent `{agent.id}` ({agent.project_name}): {old_status.value} -> {new_status.value}"
+                            summary = await self._get_activity_summary(output)
+                            if summary:
+                                msg += f"\n```\n{summary}\n```"
+                            await self._notify_channels(agent.project_name, msg)
 
             agent.last_output = output
 
@@ -202,6 +210,60 @@ class StatusMonitor:
                 if result:
                     return result
         return self.extract_activity_summary(output)
+
+    async def _relay_response(self, agent: Any) -> None:
+        """Read new output from pipe-pane log and relay extracted response to IM."""
+        if not agent.output_log_path:
+            return
+
+        log_path = Path(agent.output_log_path)
+        if not log_path.exists():
+            return
+
+        try:
+            file_size = log_path.stat().st_size
+        except OSError:
+            return
+
+        if file_size <= agent.last_relay_offset:
+            return
+
+        # Read new content from the log
+        try:
+            with open(log_path, "r", errors="replace") as f:
+                f.seek(agent.last_relay_offset)
+                new_content = f.read()
+        except OSError:
+            return
+
+        if not new_content.strip():
+            return
+
+        # Update offset
+        agent.last_relay_offset = file_size
+
+        # Try LLM extraction first, then regex fallback
+        response_text = None
+        if self.config:
+            relay_cfg = self.config.defaults.response_relay
+            api_key = self.config.get_summary_api_key()
+            if relay_cfg.enabled and api_key:
+                response_text = await extract_response(
+                    new_content,
+                    api_key=api_key,
+                    model=relay_cfg.model,
+                    max_tokens=relay_cfg.max_tokens,
+                    timeout=relay_cfg.timeout_seconds,
+                )
+
+        if not response_text:
+            response_text = extract_response_regex(new_content)
+
+        if not response_text:
+            return
+
+        msg = f"Agent `{agent.id}` ({agent.project_name}) response:\n\n{response_text}"
+        await self._notify_channels(agent.project_name, msg)
 
     @staticmethod
     def extract_prompt_text(output: str) -> str:

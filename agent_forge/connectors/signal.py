@@ -14,6 +14,7 @@ class SignalConnector(BaseConnector):
     """Signal connector using ``signal-cli daemon --json`` for receiving and ``signal-cli send`` for sending."""
 
     connector_type = ConnectorType.SIGNAL
+    CHUNK_LIMIT = 4096
 
     def __init__(self, connector_id: str, config: dict[str, Any]) -> None:
         super().__init__(connector_id, config)
