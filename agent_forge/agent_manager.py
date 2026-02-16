@@ -46,6 +46,8 @@ class Agent:
     profile: str = ""
     needs_attention: bool = False
     parked: bool = False
+    output_log_path: str = ""
+    last_relay_offset: int = 0
 
 
 def _sanitize_for_branch(text: str) -> str:
@@ -349,6 +351,10 @@ class AgentManager:
             )
             raise RuntimeError(f"Failed to create tmux session: {session_name}")
 
+        # Enable pipe-pane for full output capture
+        output_log = worktree_dir / ".agent_output.log"
+        tmux_utils.enable_pipe_pane(session_name, str(output_log))
+
         agent = Agent(
             id=short_id,
             project_name=project_name,
@@ -357,6 +363,7 @@ class AgentManager:
             branch_name=branch_name,
             task_description=task,
             profile=profile,
+            output_log_path=str(output_log),
         )
         self.agents[short_id] = agent
 
@@ -415,6 +422,15 @@ class AgentManager:
 
         project = self.registry.get_project(agent.project_name)
         project_path = Path(project.path)
+
+        # Disable pipe-pane and clean up output log
+        tmux_utils.disable_pipe_pane(agent.session_name)
+        output_log = Path(agent.output_log_path)
+        if output_log.exists():
+            try:
+                output_log.unlink()
+            except OSError:
+                pass
 
         # Kill tmux session
         tmux_utils.kill_session(agent.session_name)
@@ -499,6 +515,12 @@ class AgentManager:
                 agent_id,
                 message[:100] + ("..." if len(message) > 100 else ""),
             )
+            # Record byte offset for response relay
+            if agent.output_log_path:
+                try:
+                    agent.last_relay_offset = Path(agent.output_log_path).stat().st_size
+                except OSError:
+                    pass
         return success
 
     async def send_message_with_media(

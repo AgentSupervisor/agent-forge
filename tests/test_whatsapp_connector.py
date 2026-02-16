@@ -281,7 +281,7 @@ class TestSendMessage:
         assert "buttons" in call_args[1]["json"]
 
     @pytest.mark.asyncio
-    async def test_send_media(self, connector):
+    async def test_send_media(self, connector, tmp_path):
         mock_response = MagicMock()
         mock_response.status_code = 200
 
@@ -289,16 +289,23 @@ class TestSendMessage:
         mock_client.post = AsyncMock(return_value=mock_response)
         connector._http_client = mock_client
 
+        # Create a real temp file so path.exists() returns True
+        media_file = tmp_path / "photo.jpg"
+        media_file.write_bytes(b"fake image data")
+
         message = OutboundMessage(
             channel_id="1234567890",
             text="Check this out",
-            media_paths=["/tmp/photo.jpg"]
+            media_paths=[str(media_file)]
         )
         result = await connector.send_message(message)
 
         assert result is True
-        call_args = mock_client.post.call_args
-        assert call_args[0][0] == "http://127.0.0.1:3100/send_media"
+        # Should have 2 calls: one for text (/send), one for media (/send_media)
+        assert mock_client.post.call_count == 2
+        # Check that last call was to /send_media
+        last_call_args = mock_client.post.call_args
+        assert last_call_args[0][0] == "/send_media"
 
     @pytest.mark.asyncio
     async def test_send_failure(self, connector):
@@ -520,10 +527,14 @@ class TestLifecycle:
 
     @pytest.mark.asyncio
     async def test_stop_cleanup(self, connector):
-        # Setup mocks
-        connector._poll_task = AsyncMock()
-        connector._poll_task.cancel = MagicMock()
-        connector._poll_task.__await__ = MagicMock(return_value=iter([]))
+        # Setup mocks - create a real asyncio task that can be awaited
+        async def dummy_poll():
+            try:
+                await asyncio.sleep(1000)
+            except asyncio.CancelledError:
+                pass
+
+        connector._poll_task = asyncio.create_task(dummy_poll())
 
         mock_process = MagicMock()
         mock_process.returncode = None
