@@ -58,6 +58,13 @@ class ResponseRelayConfig(BaseModel):
     fallback_to_summary: bool = True
 
 
+class MetricsConfig(BaseModel):
+    enabled: bool = True
+    collect_interval_seconds: float = 5.0
+    enable_gpu: bool = True
+    enable_per_agent: bool = True
+
+
 class DefaultsConfig(BaseModel):
     max_agents_per_project: int = 5
     sandbox: bool = True
@@ -67,6 +74,7 @@ class DefaultsConfig(BaseModel):
     agent_instructions: str = ""
     summary: SummaryConfig = SummaryConfig()
     response_relay: ResponseRelayConfig = ResponseRelayConfig()
+    metrics: MetricsConfig = MetricsConfig()
 
 
 class SandboxConfig(BaseModel):
