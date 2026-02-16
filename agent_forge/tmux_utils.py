@@ -81,6 +81,9 @@ def create_session(name: str, working_dir: str, command: str) -> bool:
             command,
         ]
     )
+    if result.returncode == 0:
+        # Set a large scrollback buffer so users can review agent history
+        _run(["tmux", "set-option", "-t", name, "history-limit", "50000"])
     if result.returncode != 0:
         logger.error(
             "Failed to create tmux session '%s': %s", name, result.stderr.strip()
@@ -184,3 +187,21 @@ def get_cursor_y(session_name: str) -> int:
         return int(result.stdout.strip())
     except ValueError:
         return -1
+
+
+def enable_pipe_pane(session_name: str, log_path: str) -> bool:
+    """Start piping all terminal output to a log file via tmux pipe-pane."""
+    result = _run(["tmux", "pipe-pane", "-t", session_name, "-o", f"cat >> {log_path}"])
+    if result.returncode != 0:
+        logger.error("Failed to enable pipe-pane for '%s': %s", session_name, result.stderr.strip())
+        return False
+    return True
+
+
+def disable_pipe_pane(session_name: str) -> bool:
+    """Stop piping terminal output (pass empty command to pipe-pane)."""
+    result = _run(["tmux", "pipe-pane", "-t", session_name])
+    if result.returncode != 0:
+        logger.error("Failed to disable pipe-pane for '%s': %s", session_name, result.stderr.strip())
+        return False
+    return True

@@ -48,6 +48,18 @@ For a typical multi-part task:
 
 For a single focused task, skip the team — just do it directly.
 
+## Execution Flow — Keep Going
+
+When a task or plan has multiple steps, **execute all steps to completion without pausing to ask for confirmation between steps.** The user provided the task — that is your authorization to complete it.
+
+- **Don't stop to summarize progress mid-task.** Just keep working.
+- **Don't ask "should I continue?" or "shall I proceed with step N?"** — yes, you should.
+- **Don't ask for confirmation before each file edit, test run, or command.** Execute the plan.
+- **Only pause if:** you hit a genuine ambiguity that could lead to wasted work (e.g., two equally valid architectural approaches), a blocking error you can't resolve, or the task scope is unclear. Even then, try to resolve it yourself first.
+- **After plan approval**, the entire plan is authorized. Execute every step, then report the final result.
+
+The goal is uninterrupted execution from start to finish. One task = one flow.
+
 ## Anti-Patterns to Avoid
 
 - Don't use opus for writing boilerplate or running tests — use haiku.
@@ -55,6 +67,7 @@ For a single focused task, skip the team — just do it directly.
 - Don't have agents wait on each other when tasks are independent — parallelize.
 - Don't re-read files you just wrote — you know what's in them.
 - Don't add features, refactoring, or "improvements" beyond what was asked.
+- Don't stop between steps to ask "should I continue?" — just continue.
 
 ---
 

@@ -1,12 +1,13 @@
 """Tests for StatusMonitor.detect_status, polling logic, and prompt extraction."""
 
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from agent_forge.agent_manager import Agent, AgentStatus
-from agent_forge.config import DefaultsConfig, ForgeConfig, SummaryConfig
+from agent_forge.config import DefaultsConfig, ForgeConfig, ResponseRelayConfig, SummaryConfig
 from agent_forge.connectors.base import ActionButton
 from agent_forge.status_monitor import StatusMonitor
 
@@ -497,12 +498,19 @@ class TestGetActivitySummary:
         mock_summarize.assert_called_once()
         assert mock_summarize.call_args[1]["api_key"] == "env-key"
 
-
 class TestAttentionTracking:
     """Test that needs_attention and parked flags are set on status transitions."""
 
     @pytest.fixture
     def agent(self):
+
+class TestResponseRelay:
+    """Test response relay from pipe-pane logs."""
+
+    @pytest.fixture
+    def agent_with_log(self, tmp_path):
+        log_file = tmp_path / ".agent_output.log"
+        log_file.write_text("Some agent output\nI fixed the bug.\n")
         return Agent(
             id="abc123",
             project_name="test-project",
@@ -626,3 +634,127 @@ class TestAttentionTracking:
 
             assert agent.parked is False, f"parked should be False after transition to {expected_status}"
             assert agent.needs_attention is True, f"needs_attention should be True after transition to {expected_status}"
+
+            output_log_path=str(log_file),
+            last_relay_offset=0,
+        )
+
+    @pytest.fixture
+    def relay_monitor(self, agent_with_log):
+        manager = MagicMock()
+        manager.list_agents.return_value = [agent_with_log]
+        ws = MagicMock()
+        ws.broadcast_agent_update = AsyncMock()
+        ws.broadcast_terminal_output = AsyncMock()
+        connector_mgr = MagicMock()
+        connector_mgr.send_to_project_channels = AsyncMock()
+        connector_mgr.send_to_project_channels_rich = AsyncMock()
+        return StatusMonitor(
+            agent_manager=manager,
+            ws_manager=ws,
+            connector_manager=connector_mgr,
+        )
+
+    @pytest.mark.asyncio
+    async def test_relay_reads_from_log(self, relay_monitor, agent_with_log):
+        await relay_monitor._relay_response(agent_with_log)
+        cm = relay_monitor.connector_manager
+        cm.send_to_project_channels.assert_called_once()
+        text = cm.send_to_project_channels.call_args[0][1]
+        assert "response" in text.lower()
+        assert "I fixed the bug." in text
+
+    @pytest.mark.asyncio
+    async def test_relay_skips_when_no_log_path(self, relay_monitor, agent_with_log):
+        agent_with_log.output_log_path = ""
+        await relay_monitor._relay_response(agent_with_log)
+        relay_monitor.connector_manager.send_to_project_channels.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_relay_skips_when_no_new_content(self, relay_monitor, agent_with_log):
+        log_path = Path(agent_with_log.output_log_path)
+        agent_with_log.last_relay_offset = log_path.stat().st_size
+        await relay_monitor._relay_response(agent_with_log)
+        relay_monitor.connector_manager.send_to_project_channels.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_relay_updates_offset(self, relay_monitor, agent_with_log):
+        log_path = Path(agent_with_log.output_log_path)
+        expected_size = log_path.stat().st_size
+        await relay_monitor._relay_response(agent_with_log)
+        assert agent_with_log.last_relay_offset == expected_size
+
+    @pytest.mark.asyncio
+    async def test_relay_uses_llm_when_configured(self, agent_with_log):
+        config = ForgeConfig(
+            defaults=DefaultsConfig(
+                response_relay=ResponseRelayConfig(enabled=True),
+            ),
+        )
+        manager = MagicMock()
+        ws = MagicMock()
+        connector_mgr = MagicMock()
+        connector_mgr.send_to_project_channels = AsyncMock()
+        monitor = StatusMonitor(
+            agent_manager=manager,
+            ws_manager=ws,
+            connector_manager=connector_mgr,
+            config=config,
+        )
+        with (
+            patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}),
+            patch(
+                "agent_forge.status_monitor.extract_response",
+                new_callable=AsyncMock,
+                return_value="Extracted response text",
+            ) as mock_extract,
+        ):
+            await monitor._relay_response(agent_with_log)
+
+        mock_extract.assert_called_once()
+        text = connector_mgr.send_to_project_channels.call_args[0][1]
+        assert "Extracted response text" in text
+
+    @pytest.mark.asyncio
+    async def test_relay_falls_back_to_regex(self, agent_with_log):
+        config = ForgeConfig(
+            defaults=DefaultsConfig(
+                response_relay=ResponseRelayConfig(enabled=True),
+            ),
+        )
+        manager = MagicMock()
+        ws = MagicMock()
+        connector_mgr = MagicMock()
+        connector_mgr.send_to_project_channels = AsyncMock()
+        monitor = StatusMonitor(
+            agent_manager=manager,
+            ws_manager=ws,
+            connector_manager=connector_mgr,
+            config=config,
+        )
+        with (
+            patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}),
+            patch(
+                "agent_forge.status_monitor.extract_response",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            await monitor._relay_response(agent_with_log)
+
+        connector_mgr.send_to_project_channels.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_poll_triggers_relay_on_working_to_idle(
+        self, relay_monitor, agent_with_log
+    ):
+        new_output = "claude >"
+        with (
+            patch("agent_forge.tmux_utils.capture_pane", return_value=new_output),
+            patch("agent_forge.tmux_utils.session_exists", return_value=True),
+        ):
+            await relay_monitor._poll()
+
+        assert agent_with_log.status == AgentStatus.IDLE
+        cm = relay_monitor.connector_manager
+        cm.send_to_project_channels.assert_called_once()
