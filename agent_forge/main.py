@@ -596,6 +596,16 @@ async def api_stats(request: Request):
     }
 
 
+@app.get("/api/metrics")
+async def api_metrics(request: Request):
+    """Return current system and agent metrics."""
+    monitor = request.app.state.status_monitor
+    if not monitor or not monitor.metrics_collector:
+        raise HTTPException(status_code=503, detail="Metrics collection not available")
+    snapshot = monitor.metrics_collector.collect_all(request.app.state.agent_manager)
+    return snapshot.model_dump(mode="json")
+
+
 # ---------------------------------------------------------------------------
 # JSON API — Events (global)
 # ---------------------------------------------------------------------------

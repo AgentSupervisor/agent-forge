@@ -674,3 +674,14 @@ select.input {
     font-size: 14px;
     max-width: 320px;
 }
+
+/* ---- Metrics ---- */
+.metric-gauge { width: 40px; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+.metric-gauge-fill { height: 100%; transition: width 0.3s ease; border-radius: 2px; }
+.metric-gauge-fill.low { background: var(--status-working); }    /* green, <50% */
+.metric-gauge-fill.medium { background: var(--status-waiting); } /* amber, 50-80% */
+.metric-gauge-fill.high { background: var(--status-error); }     /* red, >80% */
+
+.stat-metric { display: flex; align-items: center; gap: 6px; }
+.stat-metric-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.stat-metric-value { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; min-width: 36px; text-align: right; }
