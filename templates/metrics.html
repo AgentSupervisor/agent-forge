@@ -1,0 +1,462 @@
+{% extends "base.html" %}
+{% block title %}Metrics - Agent Forge{% endblock %}
+{% block nav_metrics %}active{% endblock %}
+
+{% block content %}
+<div x-data="metricsPage()" x-init="init()" id="metrics-page">
+
+    <!-- Header bar -->
+    <div class="stats-bar">
+        <div class="stat-item">
+            <span class="stat-value">System Metrics</span>
+        </div>
+        <div style="flex:1;"></div>
+        <div class="stat-item">
+            <span style="font-size:11px;color:var(--text-muted);" id="metrics-last-update">Waiting for data...</span>
+        </div>
+    </div>
+
+    <!-- Content -->
+    <div style="padding: 24px;">
+
+        <!-- System Overview Cards -->
+        <div style="margin-bottom:32px;">
+            <h2 style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); margin-bottom:16px;">System Overview</h2>
+            <div class="metrics-grid">
+
+                <!-- CPU Card -->
+                <div class="metric-card">
+                    <div class="metric-card-header">
+                        <span class="metric-label">CPU</span>
+                        <span class="metric-value" id="metric-cpu-percent">--</span>
+                    </div>
+                    <div class="metric-gauge-ring">
+                        <svg viewBox="0 0 100 100" class="gauge-svg">
+                            <circle cx="50" cy="50" r="45" class="gauge-bg"></circle>
+                            <circle cx="50" cy="50" r="45" class="gauge-fill" id="gauge-cpu" style="--percent: 0;"></circle>
+                        </svg>
+                        <div class="gauge-center">
+                            <span class="gauge-value" id="gauge-cpu-val">0%</span>
+                        </div>
+                    </div>
+                    <div class="metric-details">
+                        <div class="metric-detail-row">
+                            <span>1m load</span>
+                            <span id="metric-cpu-load1">--</span>
+                        </div>
+                        <div class="metric-detail-row">
+                            <span>5m load</span>
+                            <span id="metric-cpu-load5">--</span>
+                        </div>
+                        <div class="metric-detail-row">
+                            <span>15m load</span>
+                            <span id="metric-cpu-load15">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Memory Card -->
+                <div class="metric-card">
+                    <div class="metric-card-header">
+                        <span class="metric-label">Memory</span>
+                        <span class="metric-value" id="metric-mem-percent">--</span>
+                    </div>
+                    <div class="metric-gauge-ring">
+                        <svg viewBox="0 0 100 100" class="gauge-svg">
+                            <circle cx="50" cy="50" r="45" class="gauge-bg"></circle>
+                            <circle cx="50" cy="50" r="45" class="gauge-fill" id="gauge-mem" style="--percent: 0;"></circle>
+                        </svg>
+                        <div class="gauge-center">
+                            <span class="gauge-value" id="gauge-mem-val">0%</span>
+                        </div>
+                    </div>
+                    <div class="metric-details">
+                        <div class="metric-detail-row">
+                            <span>Used</span>
+                            <span id="metric-mem-used">--</span>
+                        </div>
+                        <div class="metric-detail-row">
+                            <span>Total</span>
+                            <span id="metric-mem-total">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Disk Card -->
+                <div class="metric-card">
+                    <div class="metric-card-header">
+                        <span class="metric-label">Disk</span>
+                        <span class="metric-value" id="metric-disk-percent">--</span>
+                    </div>
+                    <div class="metric-gauge-ring">
+                        <svg viewBox="0 0 100 100" class="gauge-svg">
+                            <circle cx="50" cy="50" r="45" class="gauge-bg"></circle>
+                            <circle cx="50" cy="50" r="45" class="gauge-fill" id="gauge-disk" style="--percent: 0;"></circle>
+                        </svg>
+                        <div class="gauge-center">
+                            <span class="gauge-value" id="gauge-disk-val">0%</span>
+                        </div>
+                    </div>
+                    <div class="metric-details">
+                        <div class="metric-detail-row">
+                            <span>Used</span>
+                            <span id="metric-disk-used">--</span>
+                        </div>
+                        <div class="metric-detail-row">
+                            <span>Total</span>
+                            <span id="metric-disk-total">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Network Card -->
+                <div class="metric-card">
+                    <div class="metric-card-header">
+                        <span class="metric-label">Network</span>
+                    </div>
+                    <div class="metric-network-display">
+                        <div class="network-stat">
+                            <span class="network-icon">↑</span>
+                            <div>
+                                <div class="network-label">Upload</div>
+                                <div class="network-value" id="metric-net-up">-- MB/s</div>
+                            </div>
+                        </div>
+                        <div class="network-stat">
+                            <span class="network-icon">↓</span>
+                            <div>
+                                <div class="network-label">Download</div>
+                                <div class="network-value" id="metric-net-down">-- MB/s</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- GPU Card (conditionally shown) -->
+                <div class="metric-card" id="metric-gpu-card" style="display:none;">
+                    <div class="metric-card-header">
+                        <span class="metric-label">GPU</span>
+                        <span class="metric-value" id="metric-gpu-percent">--</span>
+                    </div>
+                    <div class="metric-gauge-ring">
+                        <svg viewBox="0 0 100 100" class="gauge-svg">
+                            <circle cx="50" cy="50" r="45" class="gauge-bg"></circle>
+                            <circle cx="50" cy="50" r="45" class="gauge-fill" id="gauge-gpu" style="--percent: 0;"></circle>
+                        </svg>
+                        <div class="gauge-center">
+                            <span class="gauge-value" id="gauge-gpu-val">0%</span>
+                        </div>
+                    </div>
+                    <div class="metric-details">
+                        <div class="metric-detail-row">
+                            <span>Name</span>
+                            <span id="metric-gpu-name" style="font-size:10px;">--</span>
+                        </div>
+                        <div class="metric-detail-row">
+                            <span>Memory</span>
+                            <span id="metric-gpu-mem">--</span>
+                        </div>
+                        <div class="metric-detail-row">
+                            <span>Temp</span>
+                            <span id="metric-gpu-temp">--</span>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- History Charts -->
+        <div style="margin-bottom:32px;">
+            <h2 style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); margin-bottom:16px;">History (last 5 minutes)</h2>
+            <div class="chart-grid">
+                <div class="chart-card">
+                    <h3 class="chart-title">CPU Usage</h3>
+                    <canvas id="chart-cpu"></canvas>
+                </div>
+                <div class="chart-card">
+                    <h3 class="chart-title">Memory Usage</h3>
+                    <canvas id="chart-mem"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Per-Agent Resources -->
+        <div style="margin-bottom:32px;">
+            <h2 style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); margin-bottom:16px;">Agent Resources</h2>
+            <div class="agent-metrics-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Agent ID</th>
+                            <th>Project</th>
+                            <th>Status</th>
+                            <th>CPU %</th>
+                            <th>Memory</th>
+                            <th>Processes</th>
+                        </tr>
+                    </thead>
+                    <tbody id="agent-metrics-tbody">
+                        <tr>
+                            <td colspan="6" style="text-align:center;color:var(--text-muted);padding:32px;">Waiting for metrics data...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+function metricsPage() {
+    return {
+        cpuHistory: [],
+        memHistory: [],
+        cpuChart: null,
+        memChart: null,
+        maxDataPoints: 60,
+
+        init() {
+            this.initCharts();
+            this.loadInitialData();
+        },
+
+        initCharts() {
+            const chartConfig = {
+                type: 'line',
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    plugins: {
+                        legend: { display: false },
+                    },
+                    scales: {
+                        x: {
+                            display: false,
+                        },
+                        y: {
+                            beginAtZero: true,
+                            max: 100,
+                            ticks: {
+                                color: 'rgba(139, 149, 165, 0.8)',
+                                callback: (value) => value + '%',
+                            },
+                            grid: {
+                                color: 'rgba(40, 45, 56, 0.5)',
+                            },
+                        },
+                    },
+                },
+            };
+
+            // CPU Chart
+            this.cpuChart = new Chart(document.getElementById('chart-cpu'), {
+                ...chartConfig,
+                data: {
+                    labels: [],
+                    datasets: [{
+                        data: [],
+                        borderColor: 'rgb(99, 102, 241)',
+                        backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                        borderWidth: 2,
+                        tension: 0.3,
+                        fill: true,
+                    }],
+                },
+            });
+
+            // Memory Chart
+            this.memChart = new Chart(document.getElementById('chart-mem'), {
+                ...chartConfig,
+                data: {
+                    labels: [],
+                    datasets: [{
+                        data: [],
+                        borderColor: 'rgb(16, 185, 129)',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        borderWidth: 2,
+                        tension: 0.3,
+                        fill: true,
+                    }],
+                },
+            });
+        },
+
+        async loadInitialData() {
+            try {
+                const res = await fetch('/api/metrics');
+                if (res.ok) {
+                    const data = await res.json();
+                    this.updateMetrics({ system: data.system, agents: data.agents });
+                }
+            } catch (e) {
+                console.error('Failed to load initial metrics:', e);
+            }
+        },
+
+        updateMetrics(data) {
+            const sys = data.system || {};
+            const agents = data.agents || {};
+
+            // Update last update timestamp
+            const now = new Date();
+            document.getElementById('metrics-last-update').textContent =
+                'Last update: ' + now.toLocaleTimeString();
+
+            // --- CPU ---
+            if (sys.cpu_percent !== undefined && sys.cpu_percent !== null) {
+                document.getElementById('metric-cpu-percent').textContent = sys.cpu_percent.toFixed(1) + '%';
+                document.getElementById('gauge-cpu-val').textContent = sys.cpu_percent.toFixed(0) + '%';
+                this.updateGauge('gauge-cpu', sys.cpu_percent);
+                this.addDataPoint('cpu', sys.cpu_percent);
+            }
+            if (sys.load_avg_1min !== undefined && sys.load_avg_1min !== null) {
+                document.getElementById('metric-cpu-load1').textContent = sys.load_avg_1min.toFixed(2);
+            }
+            if (sys.load_avg_5min !== undefined && sys.load_avg_5min !== null) {
+                document.getElementById('metric-cpu-load5').textContent = sys.load_avg_5min.toFixed(2);
+            }
+            if (sys.load_avg_15min !== undefined && sys.load_avg_15min !== null) {
+                document.getElementById('metric-cpu-load15').textContent = sys.load_avg_15min.toFixed(2);
+            }
+
+            // --- Memory ---
+            if (sys.memory_percent !== undefined && sys.memory_percent !== null) {
+                document.getElementById('metric-mem-percent').textContent = sys.memory_percent.toFixed(1) + '%';
+                document.getElementById('gauge-mem-val').textContent = sys.memory_percent.toFixed(0) + '%';
+                this.updateGauge('gauge-mem', sys.memory_percent);
+                this.addDataPoint('mem', sys.memory_percent);
+            }
+            if (sys.memory_used_mb !== undefined && sys.memory_total_mb !== undefined) {
+                const usedGb = (sys.memory_used_mb / 1024).toFixed(1);
+                const totalGb = (sys.memory_total_mb / 1024).toFixed(1);
+                document.getElementById('metric-mem-used').textContent = usedGb + ' GB';
+                document.getElementById('metric-mem-total').textContent = totalGb + ' GB';
+            }
+
+            // --- Disk ---
+            if (sys.disk_percent !== undefined && sys.disk_percent !== null) {
+                document.getElementById('metric-disk-percent').textContent = sys.disk_percent.toFixed(1) + '%';
+                document.getElementById('gauge-disk-val').textContent = sys.disk_percent.toFixed(0) + '%';
+                this.updateGauge('gauge-disk', sys.disk_percent);
+            }
+            if (sys.disk_used_gb !== undefined && sys.disk_total_gb !== undefined) {
+                document.getElementById('metric-disk-used').textContent = sys.disk_used_gb.toFixed(1) + ' GB';
+                document.getElementById('metric-disk-total').textContent = sys.disk_total_gb.toFixed(1) + ' GB';
+            }
+
+            // --- Network ---
+            if (sys.network_sent_mbps !== undefined && sys.network_recv_mbps !== undefined) {
+                const sent = sys.network_sent_mbps !== null ? sys.network_sent_mbps.toFixed(2) : '0.00';
+                const recv = sys.network_recv_mbps !== null ? sys.network_recv_mbps.toFixed(2) : '0.00';
+                document.getElementById('metric-net-up').textContent = sent + ' MB/s';
+                document.getElementById('metric-net-down').textContent = recv + ' MB/s';
+            }
+
+            // --- GPU (show/hide) ---
+            const gpuCard = document.getElementById('metric-gpu-card');
+            if (sys.gpu_utilization !== null && sys.gpu_utilization !== undefined) {
+                gpuCard.style.display = 'block';
+                document.getElementById('metric-gpu-percent').textContent = sys.gpu_utilization.toFixed(1) + '%';
+                document.getElementById('gauge-gpu-val').textContent = sys.gpu_utilization.toFixed(0) + '%';
+                this.updateGauge('gauge-gpu', sys.gpu_utilization);
+                if (sys.gpu_name) {
+                    document.getElementById('metric-gpu-name').textContent = sys.gpu_name;
+                }
+                if (sys.gpu_memory_used_mb !== null && sys.gpu_memory_total_mb !== null) {
+                    const memPct = (sys.gpu_memory_used_mb / sys.gpu_memory_total_mb * 100).toFixed(1);
+                    document.getElementById('metric-gpu-mem').textContent = memPct + '%';
+                }
+                if (sys.gpu_temperature !== null && sys.gpu_temperature !== undefined) {
+                    document.getElementById('metric-gpu-temp').textContent = sys.gpu_temperature.toFixed(0) + '°C';
+                }
+            } else {
+                gpuCard.style.display = 'none';
+            }
+
+            // --- Per-Agent Metrics Table ---
+            this.updateAgentTable(agents);
+        },
+
+        updateGauge(id, percent) {
+            const gauge = document.getElementById(id);
+            if (!gauge) return;
+            gauge.style.setProperty('--percent', percent);
+            // Update color based on threshold
+            gauge.classList.remove('gauge-low', 'gauge-medium', 'gauge-high');
+            if (percent >= 80) {
+                gauge.classList.add('gauge-high');
+            } else if (percent >= 50) {
+                gauge.classList.add('gauge-medium');
+            } else {
+                gauge.classList.add('gauge-low');
+            }
+        },
+
+        addDataPoint(type, value) {
+            const history = type === 'cpu' ? this.cpuHistory : this.memHistory;
+            const chart = type === 'cpu' ? this.cpuChart : this.memChart;
+
+            history.push(value);
+            if (history.length > this.maxDataPoints) {
+                history.shift();
+            }
+
+            chart.data.labels = history.map((_, i) => i);
+            chart.data.datasets[0].data = [...history];
+            chart.update('none');
+        },
+
+        updateAgentTable(agentsData) {
+            const tbody = document.getElementById('agent-metrics-tbody');
+            if (!agentsData || Object.keys(agentsData).length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:32px;">No agent metrics available</td></tr>';
+                return;
+            }
+
+            // Fetch agent list to get full info
+            fetch('/api/agents')
+                .then(res => res.json())
+                .then(agents => {
+                    const rows = [];
+                    for (const aid in agentsData) {
+                        const metrics = agentsData[aid];
+                        const agent = agents.find(a => a.id === aid);
+                        if (!agent) continue;
+
+                        const statusClass = agent.status;
+                        const statusLabel = agent.status.replace('_', ' ');
+                        const cpuPct = metrics.cpu_percent !== undefined && metrics.cpu_percent !== null
+                            ? metrics.cpu_percent.toFixed(1) + '%'
+                            : '--';
+                        const memMb = metrics.memory_mb !== undefined && metrics.memory_mb !== null
+                            ? metrics.memory_mb.toFixed(0) + ' MB'
+                            : '--';
+                        const procCount = metrics.process_count || '--';
+
+                        rows.push(`
+                            <tr onclick="window.location='/agent/${aid}'" style="cursor:pointer;">
+                                <td><span style="font-family:monospace;font-size:13px;">${aid}</span></td>
+                                <td>${agent.project_name}</td>
+                                <td><span class="status-badge ${statusClass}">${statusLabel}</span></td>
+                                <td style="font-variant-numeric:tabular-nums;">${cpuPct}</td>
+                                <td style="font-variant-numeric:tabular-nums;">${memMb}</td>
+                                <td style="font-variant-numeric:tabular-nums;">${procCount}</td>
+                            </tr>
+                        `);
+                    }
+                    tbody.innerHTML = rows.join('');
+                })
+                .catch(err => {
+                    console.error('Failed to fetch agents:', err);
+                });
+        },
+    };
+}
+</script>
+{% endblock %}

@@ -46,6 +46,8 @@ class ConnectorManager:
         # Tracks channels that sent messages to a project so notifications can reach them
         # even without pre-configured channel bindings.
         self._reply_channels: dict[str, set[tuple[str, str]]] = {}
+        # Metrics collector (set by main.py lifespan)
+        self.metrics_collector: Any = None
 
     @property
     def config(self) -> Any:
@@ -473,6 +475,7 @@ class ConnectorManager:
                 "  /kill <agent_id> — Terminate an agent\n"
                 "  /projects — List available projects\n"
                 "  /attention — List agents needing attention\n"
+                "  /metrics — Show server performance metrics\n"
                 "\n"
                 "AGENT CONTROL\n"
                 "  /approve [agent_id] — Approve a pending action\n"
@@ -600,6 +603,53 @@ class ConnectorManager:
                     task = f' — "{a.task_description}"' if a.task_description else ""
                     lines.append(f"    - {a.id}: {a.status.value}{task}")
             await self._reply(msg, "\n".join(lines))
+
+        elif cmd == "metrics":
+            # Use the metrics_collector if wired, otherwise create a temporary one
+            try:
+                if self.metrics_collector:
+                    snapshot = self.metrics_collector.collect_all(self.agent_manager)
+                else:
+                    # Fallback: create a temporary collector
+                    from ..metrics_collector import MetricsCollector
+                    collector = MetricsCollector(enable_gpu=True)
+                    snapshot = collector.collect_all(self.agent_manager)
+
+                sys = snapshot.system
+
+                lines = [
+                    "Server Performance",
+                    "━━━━━━━━━━━━━━━━━━",
+                    "",
+                    f"CPU:     {sys.cpu_percent:.1f}%",
+                    f"Memory:  {sys.memory_percent:.1f}% ({sys.memory_used_mb/1024:.1f}/{sys.memory_total_mb/1024:.1f} GB)",
+                    f"Disk:    {sys.disk_percent:.1f}% ({sys.disk_used_gb:.1f}/{sys.disk_total_gb:.1f} GB)",
+                    f"Load:    {sys.load_avg_1min:.2f} / {sys.load_avg_5min:.2f} / {sys.load_avg_15min:.2f}",
+                    f"Network: ↑{sys.network_sent_mbps:.1f} ↓{sys.network_recv_mbps:.1f} MB/s",
+                ]
+
+                if sys.gpu_utilization is not None:
+                    gpu_mem = ""
+                    if sys.gpu_memory_used_mb is not None and sys.gpu_memory_total_mb is not None:
+                        gpu_mem = f" ({sys.gpu_memory_used_mb/1024:.1f}/{sys.gpu_memory_total_mb/1024:.1f} GB)"
+                    temp = f" {sys.gpu_temperature:.0f}°C" if sys.gpu_temperature else ""
+                    lines.append(f"GPU:     {sys.gpu_utilization:.1f}%{gpu_mem}{temp}")
+                    if sys.gpu_name:
+                        lines.append(f"         {sys.gpu_name}")
+
+                if snapshot.agents:
+                    lines.append("")
+                    lines.append(f"Agents: {snapshot.total_agents_running} running, {snapshot.total_agent_memory_mb:.0f} MB total")
+                    for aid, am in snapshot.agents.items():
+                        agent = self.agent_manager.get_agent(aid)
+                        proj = agent.project_name if agent else "?"
+                        lines.append(f"  {aid} ({proj}): CPU {am.cpu_percent:.1f}%, Mem {am.memory_mb:.0f} MB, {am.process_count} procs")
+
+                await self._reply(msg, "\n".join(lines))
+            except ImportError:
+                await self._reply(msg, "Metrics not available (psutil not installed)")
+            except Exception as e:
+                await self._reply(msg, f"Failed to collect metrics: {e}")
 
         else:
             await self._reply(msg, f"Unknown command: /{cmd}")
