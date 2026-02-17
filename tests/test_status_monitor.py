@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agent_forge.agent_manager import Agent, AgentStatus
-from agent_forge.config import DefaultsConfig, ForgeConfig, ResponseRelayConfig, SummaryConfig
+from agent_forge.config import DefaultsConfig, ForgeConfig, MetricsConfig, ResponseRelayConfig, SummaryConfig
 from agent_forge.connectors.base import ActionButton
 from agent_forge.status_monitor import StatusMonitor
 
@@ -179,6 +179,54 @@ class TestStatusMonitorPoll:
             mock_db, agent.id, agent.project_name,
             "status_change", {"status": AgentStatus.ERROR.value},
         )
+
+    @pytest.mark.asyncio
+    async def test_poll_collects_metrics_on_interval(self, agent):
+        """Verify metrics_collector.collect_all is called at configured interval."""
+        # Create config with metrics enabled
+        config = ForgeConfig(
+            defaults=DefaultsConfig(
+                metrics=MetricsConfig(
+                    enabled=True,
+                    collect_interval_seconds=5.0,
+                ),
+            ),
+        )
+
+        # Create monitor with mocked metrics_collector
+        manager = MagicMock()
+        manager.list_agents.return_value = [agent]
+        ws = MagicMock()
+        ws.broadcast_agent_update = AsyncMock()
+        ws.broadcast_terminal_output = AsyncMock()
+        ws.broadcast_metrics = AsyncMock()
+
+        monitor = StatusMonitor(
+            agent_manager=manager,
+            ws_manager=ws,
+            config=config,
+        )
+
+        # Mock the metrics collector
+        mock_collector = MagicMock()
+        mock_snapshot = MagicMock()
+        mock_collector.collect_all.return_value = mock_snapshot
+        monitor.metrics_collector = mock_collector
+
+        # Set last collect time to 0 to ensure we collect on first poll
+        monitor._last_metrics_collect = 0.0
+
+        with (
+            patch("agent_forge.tmux_utils.capture_pane", return_value="working..."),
+            patch("agent_forge.tmux_utils.session_exists", return_value=True),
+            patch("agent_forge.metrics_collector.time.time", return_value=10.0),
+        ):
+            await monitor._poll()
+
+        # Verify metrics were collected and broadcast
+        mock_collector.collect_all.assert_called_once_with(manager)
+        ws.broadcast_metrics.assert_called_once_with(mock_snapshot)
+        assert monitor._last_metrics_collect == 10.0
 
 
 class TestExtractPromptText:
@@ -534,6 +582,14 @@ class TestAttentionTracking:
 
     @pytest.fixture
     def agent(self):
+
+class TestResponseRelay:
+    """Test response relay from pipe-pane logs."""
+
+    @pytest.fixture
+    def agent_with_log(self, tmp_path):
+        log_file = tmp_path / ".agent_output.log"
+        log_file.write_text("Some agent output\nI fixed the bug.\n")
         return Agent(
             id="abc123",
             project_name="test-project",

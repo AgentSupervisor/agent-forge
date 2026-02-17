@@ -674,3 +674,231 @@ select.input {
     font-size: 14px;
     max-width: 320px;
 }
+
+/* ---- Metrics ---- */
+.metric-gauge { width: 40px; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+.metric-gauge-fill { height: 100%; transition: width 0.3s ease; border-radius: 2px; }
+.metric-gauge-fill.low { background: var(--status-working); }    /* green, <50% */
+.metric-gauge-fill.medium { background: var(--status-waiting); } /* amber, 50-80% */
+.metric-gauge-fill.high { background: var(--status-error); }     /* red, >80% */
+
+.stat-metric { display: flex; align-items: center; gap: 6px; }
+.stat-metric-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.stat-metric-value { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; min-width: 36px; text-align: right; }
+
+/* ---- Metrics Page ---- */
+.metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 20px;
+}
+
+.metric-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    transition: all 0.2s;
+    backdrop-filter: blur(8px);
+    background: linear-gradient(135deg, var(--bg-card) 0%, rgba(24, 27, 34, 0.8) 100%);
+}
+
+.metric-card:hover {
+    border-color: var(--border-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+}
+
+.metric-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+.metric-label {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.metric-value {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Ring Gauge */
+.metric-gauge-ring {
+    position: relative;
+    width: 160px;
+    height: 160px;
+    margin: 0 auto 20px;
+}
+
+.gauge-svg {
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+}
+
+.gauge-bg {
+    fill: none;
+    stroke: var(--border);
+    stroke-width: 8;
+}
+
+.gauge-fill {
+    fill: none;
+    stroke-width: 8;
+    stroke-linecap: round;
+    transition: stroke-dashoffset 0.5s ease, stroke 0.3s ease;
+    stroke-dasharray: 283;
+    stroke-dashoffset: 283;
+}
+
+.gauge-fill.gauge-low { stroke: var(--status-working); }
+.gauge-fill.gauge-medium { stroke: var(--status-waiting); }
+.gauge-fill.gauge-high { stroke: var(--status-error); }
+
+.gauge-center {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+}
+
+.gauge-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Metric Details */
+.metric-details {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.metric-detail-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.metric-detail-row span:first-child {
+    color: var(--text-muted);
+}
+
+.metric-detail-row span:last-child {
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+}
+
+/* Network Display */
+.metric-network-display {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    padding: 24px 0;
+}
+
+.network-stat {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.network-icon {
+    font-size: 32px;
+    color: var(--accent);
+    width: 48px;
+    text-align: center;
+}
+
+.network-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+}
+
+.network-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Charts */
+.chart-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    gap: 20px;
+}
+
+.chart-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+}
+
+.chart-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+}
+
+.chart-card canvas {
+    height: 200px !important;
+}
+
+/* Agent Metrics Table */
+.agent-metrics-table {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.agent-metrics-table table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.agent-metrics-table th {
+    background: var(--bg-surface);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 12px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+}
+
+.agent-metrics-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.agent-metrics-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.agent-metrics-table tbody tr:hover {
+    background: var(--bg-card-hover);
+}

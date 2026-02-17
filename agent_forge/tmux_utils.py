@@ -74,6 +74,10 @@ def create_session(name: str, working_dir: str, command: str) -> bool:
             "tmux",
             "new-session",
             "-d",
+            "-x",
+            "250",
+            "-y",
+            "50",
             "-s",
             name,
             "-c",
@@ -155,6 +159,19 @@ def capture_pane(session_name: str, lines: int = 50) -> str:
         )
         return ""
     return result.stdout
+
+
+def resize_window(session_name: str, width: int = 250, height: int = 50) -> bool:
+    """Resize a tmux session window to the given dimensions."""
+    result = _run(
+        ["tmux", "resize-window", "-t", session_name, "-x", str(width), "-y", str(height)]
+    )
+    if result.returncode != 0:
+        logger.debug(
+            "Failed to resize window for '%s': %s", session_name, result.stderr.strip()
+        )
+        return False
+    return True
 
 
 def send_raw(session_name: str, *keys: str) -> bool:

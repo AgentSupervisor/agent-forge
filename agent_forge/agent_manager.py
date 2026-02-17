@@ -597,8 +597,17 @@ class AgentManager:
     async def recover_sessions(self) -> None:
         """
         On startup, scan for existing forge-* tmux sessions
-        and reconstruct self.agents from them.
+        and reconstruct self.agents from them, restoring persisted
+        metadata (task_description, branch_name, etc.) from the database.
         """
+        # Load saved snapshots keyed by agent_id
+        snapshots: dict[str, dict] = {}
+        if hasattr(self, "_db") and self._db is not None:
+            from . import database
+            rows = await database.load_snapshots(self._db)
+            for row in rows:
+                snapshots[row["agent_id"]] = row
+
         sessions = tmux_utils.list_sessions()
         recovered = 0
         for session in sessions:
@@ -637,15 +646,28 @@ class AgentManager:
 
             detected_status = StatusMonitor.detect_status(output, output)
 
+            # Restore persisted fields from the database snapshot if available
+            snap = snapshots.get(short_id, {})
+
             agent = Agent(
                 id=short_id,
                 project_name=project_name,
                 session_name=session.name,
                 worktree_path=worktree_path,
-                branch_name=f"agent/{short_id}/recovered",
+                branch_name=snap.get("branch_name", f"agent/{short_id}/recovered"),
                 status=detected_status,
                 last_output=output,
+                task_description=snap.get("task_description", ""),
+                needs_attention=bool(snap.get("needs_attention", False)),
+                parked=bool(snap.get("parked", False)),
             )
+            # Restore created_at from snapshot if available
+            if snap.get("created_at"):
+                try:
+                    agent.created_at = datetime.fromisoformat(snap["created_at"])
+                except (ValueError, TypeError):
+                    pass
+
             self.agents[short_id] = agent
             recovered += 1
 

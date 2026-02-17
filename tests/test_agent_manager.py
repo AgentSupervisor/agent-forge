@@ -158,6 +158,45 @@ class TestAgentManager:
         assert agent.status == AgentStatus.IDLE
 
     @pytest.mark.asyncio
+    async def test_recover_sessions_restores_snapshot(self, manager):
+        """Test that recovery loads persisted fields from database snapshots."""
+        from unittest.mock import AsyncMock
+
+        mock_session = MagicMock()
+        mock_session.name = "forge__test-project__abc123"
+
+        snapshot_rows = [
+            {
+                "agent_id": "abc123",
+                "project_name": "test-project",
+                "session_name": "forge__test-project__abc123",
+                "worktree_path": "/tmp/worktree",
+                "branch_name": "agent/abc123/fix-login-bug",
+                "status": "idle",
+                "task_description": "fix login bug",
+                "created_at": "2026-01-15T10:00:00",
+                "last_activity": "2026-01-15T11:00:00",
+                "last_output": "",
+                "needs_attention": 1,
+                "parked": 0,
+            }
+        ]
+
+        manager._db = MagicMock()
+        with (
+            patch("agent_forge.tmux_utils.list_sessions", return_value=[mock_session]),
+            patch("agent_forge.database.load_snapshots", new_callable=AsyncMock, return_value=snapshot_rows),
+        ):
+            await manager.recover_sessions()
+
+        assert "abc123" in manager.agents
+        agent = manager.agents["abc123"]
+        assert agent.task_description == "fix login bug"
+        assert agent.branch_name == "agent/abc123/fix-login-bug"
+        assert agent.needs_attention is True
+        assert agent.created_at.year == 2026
+
+    @pytest.mark.asyncio
     async def test_spawn_cleanup_on_tmux_failure(self, manager):
         """Test that failed tmux session creation cleans up the worktree."""
         with (
