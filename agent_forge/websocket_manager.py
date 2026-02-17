@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from fastapi import WebSocket
 
 from .agent_manager import Agent
+
+if TYPE_CHECKING:
+    from .metrics_collector import MetricsSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -63,4 +67,14 @@ class WebSocketManager:
             "type": "terminal_output",
             "agent_id": agent_id,
             "output": output,
+        })
+
+    async def broadcast_metrics(self, snapshot: MetricsSnapshot) -> None:
+        """Broadcast system and agent metrics to all connected clients."""
+        await self.broadcast({
+            "type": "metrics_update",
+            "system": snapshot.system.model_dump(mode="json"),
+            "agents": {k: v.model_dump(mode="json") for k, v in snapshot.agents.items()},
+            "total_agents_running": snapshot.total_agents_running,
+            "total_agent_memory_mb": snapshot.total_agent_memory_mb,
         })

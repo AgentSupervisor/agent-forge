@@ -103,6 +103,40 @@
             </div>
         </div>
 
+        <!-- Resources -->
+        <div class="detail-section" id="detail-metrics-section">
+            <h3>Resources</h3>
+            <div style="display:flex; flex-direction:column; gap:8px; font-size:12px;">
+                <div style="display:flex; justify-content:space-between;">
+                    <span style="color:var(--text-muted);">CPU</span>
+                    <span id="detail-metric-cpu">--</span>
+                </div>
+                <div style="display:flex; justify-content:space-between;">
+                    <span style="color:var(--text-muted);">Memory</span>
+                    <span id="detail-metric-mem">--</span>
+                </div>
+                <div style="display:flex; justify-content:space-between;">
+                    <span style="color:var(--text-muted);">Processes</span>
+                    <span id="detail-metric-procs">--</span>
+                </div>
+            </div>
+            <h3 style="margin-top:12px;">System</h3>
+            <div style="display:flex; flex-direction:column; gap:8px; font-size:12px;">
+                <div style="display:flex; justify-content:space-between;">
+                    <span style="color:var(--text-muted);">CPU</span>
+                    <span id="detail-sys-cpu">--</span>
+                </div>
+                <div style="display:flex; justify-content:space-between;">
+                    <span style="color:var(--text-muted);">Memory</span>
+                    <span id="detail-sys-mem">--</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; display:none;" id="detail-sys-gpu-row">
+                    <span style="color:var(--text-muted);">GPU</span>
+                    <span id="detail-sys-gpu">--</span>
+                </div>
+            </div>
+        </div>
+
         <!-- Event log -->
         <div class="detail-section" style="flex:1; display:flex; flex-direction:column; min-height:0;">
             <h3>Event Log</h3>

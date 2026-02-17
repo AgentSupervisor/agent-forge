@@ -117,6 +117,9 @@ async def lifespan(app: FastAPI):
     # Wire ConnectorManager into StatusMonitor for outbound notifications
     if status_monitor and connector_manager:
         status_monitor.connector_manager = connector_manager
+        # Wire metrics_collector into ConnectorManager for /metrics command
+        if status_monitor.metrics_collector:
+            connector_manager.metrics_collector = status_monitor.metrics_collector
 
     # Inject demo data if requested
     if demo_mode:
@@ -302,6 +305,18 @@ async def settings_page(request: Request):
 @app.get("/console", response_class=HTMLResponse)
 async def console_page(request: Request):
     return templates.TemplateResponse("console.html", {"request": request})
+
+
+@app.get("/metrics", response_class=HTMLResponse)
+async def metrics_page(request: Request):
+    mgr: AgentManager = request.app.state.agent_manager
+    return templates.TemplateResponse(
+        "metrics.html",
+        {
+            "request": request,
+            "total_agents": len(mgr.list_agents()),
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -594,6 +609,16 @@ async def api_stats(request: Request):
         "total_sub_agents": total_sub_agents,
         "needs_attention_count": needs_attention_count,
     }
+
+
+@app.get("/api/metrics")
+async def api_metrics(request: Request):
+    """Return current system and agent metrics."""
+    monitor = request.app.state.status_monitor
+    if not monitor or not monitor.metrics_collector:
+        raise HTTPException(status_code=503, detail="Metrics collection not available")
+    snapshot = monitor.metrics_collector.collect_all(request.app.state.agent_manager)
+    return snapshot.model_dump(mode="json")
 
 
 # ---------------------------------------------------------------------------
