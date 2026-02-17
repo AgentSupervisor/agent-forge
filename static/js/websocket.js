@@ -45,6 +45,8 @@
                 handleAgentUpdate(data);
             } else if (data.type === "terminal_output") {
                 handleTerminalOutput(data);
+            } else if (data.type === "metrics_update") {
+                handleMetricsUpdate(data);
             }
         };
 
@@ -221,6 +223,159 @@
         }
         if (window._terminalAutoScroll !== false) {
             terminal.scrollTop = terminal.scrollHeight;
+        }
+    }
+
+    function handleMetricsUpdate(data) {
+        var sys = data.system || {};
+        var agents = data.agents || {};
+
+        // Helper to get color class based on percentage
+        function getColorClass(percent) {
+            if (percent === null || percent === undefined) return "low";
+            if (percent >= 80) return "high";
+            if (percent >= 50) return "medium";
+            return "low";
+        }
+
+        // --- Dashboard stats bar: system metrics ---
+
+        // CPU
+        var cpuVal = document.getElementById("stat-cpu-val");
+        var cpuFill = document.getElementById("stat-cpu-fill");
+        if (cpuVal && sys.cpu_percent !== undefined && sys.cpu_percent !== null) {
+            cpuVal.textContent = sys.cpu_percent.toFixed(1) + "%";
+            if (cpuFill) {
+                cpuFill.style.width = sys.cpu_percent + "%";
+                cpuFill.className = "metric-gauge-fill " + getColorClass(sys.cpu_percent);
+            }
+        }
+
+        // Memory
+        var memVal = document.getElementById("stat-mem-val");
+        var memFill = document.getElementById("stat-mem-fill");
+        if (memVal && sys.memory_percent !== undefined && sys.memory_percent !== null) {
+            memVal.textContent = sys.memory_percent.toFixed(1) + "%";
+            if (memFill) {
+                memFill.style.width = sys.memory_percent + "%";
+                memFill.className = "metric-gauge-fill " + getColorClass(sys.memory_percent);
+            }
+        }
+
+        // GPU (show/hide based on availability)
+        var gpuItem = document.getElementById("stat-gpu-item");
+        var gpuVal = document.getElementById("stat-gpu-val");
+        var gpuFill = document.getElementById("stat-gpu-fill");
+        if (gpuItem) {
+            if (sys.gpu_utilization !== null && sys.gpu_utilization !== undefined) {
+                gpuItem.style.display = "flex";
+                if (gpuVal) gpuVal.textContent = sys.gpu_utilization.toFixed(1) + "%";
+                if (gpuFill) {
+                    gpuFill.style.width = sys.gpu_utilization + "%";
+                    gpuFill.className = "metric-gauge-fill " + getColorClass(sys.gpu_utilization);
+                }
+            } else {
+                gpuItem.style.display = "none";
+            }
+        }
+
+        // Disk
+        var diskVal = document.getElementById("stat-disk-val");
+        if (diskVal && sys.disk_percent !== undefined && sys.disk_percent !== null) {
+            diskVal.textContent = sys.disk_percent.toFixed(1) + "%";
+        }
+
+        // Network
+        var netVal = document.getElementById("stat-net-val");
+        if (netVal && sys.network_sent_mbps !== undefined && sys.network_recv_mbps !== undefined) {
+            var sent = sys.network_sent_mbps !== null ? sys.network_sent_mbps.toFixed(1) : "0.0";
+            var recv = sys.network_recv_mbps !== null ? sys.network_recv_mbps.toFixed(1) : "0.0";
+            netVal.textContent = "\u2191" + sent + " \u2193" + recv;
+        }
+
+        // --- Dashboard: per-agent metrics ---
+
+        for (var aid in agents) {
+            var agentData = agents[aid];
+            var cpuEl = document.getElementById("agent-cpu-" + aid);
+            var memEl = document.getElementById("agent-mem-" + aid);
+
+            if (cpuEl && agentData.cpu_percent !== undefined && agentData.cpu_percent !== null) {
+                cpuEl.style.display = "flex";
+                var cpuSpan = cpuEl.querySelector(".agent-cpu-val");
+                if (cpuSpan) cpuSpan.textContent = agentData.cpu_percent.toFixed(1) + "%";
+            }
+
+            if (memEl && agentData.memory_mb !== undefined && agentData.memory_mb !== null) {
+                memEl.style.display = "flex";
+                var memSpan = memEl.querySelector(".agent-mem-val");
+                if (memSpan) memSpan.textContent = agentData.memory_mb.toFixed(0) + " MB";
+            }
+        }
+
+        // --- Agent detail page: agent metrics ---
+
+        if (window.currentAgentId && agents[window.currentAgentId]) {
+            var agentMetrics = agents[window.currentAgentId];
+
+            var detailCpu = document.getElementById("detail-metric-cpu");
+            if (detailCpu && agentMetrics.cpu_percent !== undefined && agentMetrics.cpu_percent !== null) {
+                detailCpu.textContent = agentMetrics.cpu_percent.toFixed(1) + "%";
+            }
+
+            var detailMem = document.getElementById("detail-metric-mem");
+            if (detailMem && agentMetrics.memory_mb !== undefined && agentMetrics.memory_mb !== null) {
+                detailMem.textContent = agentMetrics.memory_mb.toFixed(1) + " MB";
+            }
+
+            var detailProcs = document.getElementById("detail-metric-procs");
+            if (detailProcs && agentMetrics.process_count !== undefined && agentMetrics.process_count !== null) {
+                detailProcs.textContent = agentMetrics.process_count;
+            }
+        }
+
+        // --- Agent detail page: system metrics ---
+
+        var detailSysCpu = document.getElementById("detail-sys-cpu");
+        if (detailSysCpu && sys.cpu_percent !== undefined && sys.cpu_percent !== null) {
+            detailSysCpu.textContent = sys.cpu_percent.toFixed(1) + "%";
+        }
+
+        var detailSysMem = document.getElementById("detail-sys-mem");
+        if (detailSysMem && sys.memory_percent !== undefined && sys.memory_percent !== null) {
+            var memText = sys.memory_percent.toFixed(1) + "%";
+            if (sys.memory_used_mb !== undefined && sys.memory_total_mb !== undefined) {
+                var usedGb = (sys.memory_used_mb / 1024).toFixed(1);
+                var totalGb = (sys.memory_total_mb / 1024).toFixed(1);
+                memText += " (" + usedGb + "/" + totalGb + " GB)";
+            }
+            detailSysMem.textContent = memText;
+        }
+
+        var detailSysGpuRow = document.getElementById("detail-sys-gpu-row");
+        var detailSysGpu = document.getElementById("detail-sys-gpu");
+        if (detailSysGpuRow && detailSysGpu) {
+            if (sys.gpu_utilization !== null && sys.gpu_utilization !== undefined) {
+                detailSysGpuRow.style.display = "flex";
+                var gpuText = sys.gpu_utilization.toFixed(1) + "%";
+                if (sys.gpu_memory_used_mb !== null && sys.gpu_memory_total_mb !== null &&
+                    sys.gpu_memory_used_mb !== undefined && sys.gpu_memory_total_mb !== undefined) {
+                    var gpuMemPct = (sys.gpu_memory_used_mb / sys.gpu_memory_total_mb * 100).toFixed(1);
+                    gpuText += " (mem: " + gpuMemPct + "%)";
+                }
+                if (sys.gpu_temperature !== null && sys.gpu_temperature !== undefined) {
+                    gpuText += " " + sys.gpu_temperature.toFixed(0) + "\u00B0C";
+                }
+                detailSysGpu.textContent = gpuText;
+            } else {
+                detailSysGpuRow.style.display = "none";
+            }
+        }
+
+        // --- Metrics page: forward via custom event ---
+
+        if (document.getElementById("metrics-page")) {
+            window.dispatchEvent(new CustomEvent("metrics-update", { detail: data }));
         }
     }
 
