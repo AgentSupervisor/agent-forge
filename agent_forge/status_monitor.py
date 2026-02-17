@@ -99,7 +99,7 @@ class StatusMonitor:
             if agent.status == AgentStatus.STOPPED:
                 continue
 
-            output = tmux_utils.capture_pane(agent.session_name, lines=100)
+            output = tmux_utils.capture_pane(agent.session_name, lines=5000)
 
             if not tmux_utils.session_exists(agent.session_name):
                 old_status = agent.status
