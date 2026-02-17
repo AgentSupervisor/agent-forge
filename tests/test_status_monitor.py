@@ -582,6 +582,7 @@ class TestAttentionTracking:
 
     @pytest.fixture
     def agent(self):
+        pass
 
 class TestResponseRelay:
     """Test response relay from pipe-pane logs."""

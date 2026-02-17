@@ -395,7 +395,12 @@ class StatusMonitor:
             r"|^[\s\-]{6,}$"                    # dash-only separator lines
             r"|^\s*⏵"                           # Claude Code UI chrome (bypass toggle)
             r"|^\s*[❯>]\s+\S"                  # Claude Code tool invocations (❯ command)
-            r"|^\s*[✢-✿]"                           # Claude Code thinking/churning indicator
+            r"|^\s*[✢-✿]"                      # Claude Code thinking/churning indicator
+            r"|.*\bChannelling\b"               # Claude Code "Channelling…" status
+            r"|^\s*⏺"                           # Claude Code status dot
+            r"|^\s*[·.…↑↓←→]{1,}\s*$"          # terminal artifacts: arrows, dots, middots
+            r"|^\s*\S{1,2}\s*$"                 # very short (1-2 char) fragment lines
+            r"|^\s*\w+…\s*$"                    # single-word status text ending in …
         )
         meaningful = [ln for ln in tail if not noise_re.match(ln)]
         if not meaningful:
