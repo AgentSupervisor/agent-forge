@@ -66,6 +66,7 @@ class StatusMonitor:
         self.config = config
         self._running = False
         self._task: asyncio.Task | None = None
+        self._resized_sessions: set[str] = set()
 
     async def start(self) -> None:
         """Start the background polling loop."""
@@ -98,6 +99,11 @@ class StatusMonitor:
         for agent in self.agent_manager.list_agents():
             if agent.status == AgentStatus.STOPPED:
                 continue
+
+            # Resize legacy sessions that were created with default 80-column width
+            if agent.session_name not in self._resized_sessions:
+                tmux_utils.resize_window(agent.session_name)
+                self._resized_sessions.add(agent.session_name)
 
             output = tmux_utils.capture_pane(agent.session_name, lines=5000)
 
