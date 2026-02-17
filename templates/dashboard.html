@@ -407,7 +407,7 @@ function addAgentCard(a) {
 }
 
 async function killAgent(agentId) {
-    if (!confirm('Kill agent ' + agentId + '?')) return;
+    if (!confirm('Kill agent ' + agentId + '?\n\nThis will terminate the agent immediately. All unsaved progress will be lost and the worktree will be removed.')) return;
     try {
         const res = await fetch('/api/agents/' + agentId, { method: 'DELETE' });
         if (res.ok) {
