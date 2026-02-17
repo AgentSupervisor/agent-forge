@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +68,19 @@ class StatusMonitor:
         self._running = False
         self._task: asyncio.Task | None = None
         self._resized_sessions: set[str] = set()
+        self.metrics_collector: object | None = None
+        self._last_metrics_collect: float = 0.0
+
+        # Initialize metrics collector if enabled and psutil is available
+        if config and config.defaults.metrics.enabled:
+            try:
+                from .metrics_collector import MetricsCollector
+                self.metrics_collector = MetricsCollector(
+                    enable_gpu=config.defaults.metrics.enable_gpu
+                )
+                logger.info("MetricsCollector initialized")
+            except ImportError:
+                logger.warning("psutil not available; metrics collection disabled")
 
     async def start(self) -> None:
         """Start the background polling loop."""
@@ -165,6 +179,18 @@ class StatusMonitor:
 
             await self.ws_manager.broadcast_agent_update(agent)
             await self.ws_manager.broadcast_terminal_output(agent.id, output)
+
+        # Collect and broadcast metrics at configured interval
+        if self.metrics_collector:
+            now = time.time()
+            interval = self.config.defaults.metrics.collect_interval_seconds if self.config else 5.0
+            if now - self._last_metrics_collect >= interval:
+                try:
+                    snapshot = self.metrics_collector.collect_all(self.agent_manager)
+                    await self.ws_manager.broadcast_metrics(snapshot)
+                except Exception:
+                    logger.exception("Metrics collection failed")
+                self._last_metrics_collect = now
 
     async def _notify_channels(self, project_name: str, text: str) -> None:
         """Send status notification to bound IM channels (best-effort)."""
