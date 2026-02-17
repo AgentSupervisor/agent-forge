@@ -29,6 +29,11 @@ _NOISE_RE = re.compile(
     r"|^\s*⏵"
     r"|^\s*[❯>]\s+\S"
     r"|^\s*[✢-✿]"
+    r"|.*\bChannelling\b"                      # Claude Code "Channelling…" status
+    r"|^\s*⏺"                                  # Claude Code status dot
+    r"|^\s*[·.…↑↓←→]{1,}\s*$"                 # terminal artifacts: arrows, dots, middots
+    r"|^\s*\S{1,2}\s*$"                        # very short (1-2 char) fragment lines
+    r"|^\s*\w+…\s*$"                           # single-word status text ending in …
 )
 
 _SYSTEM_PROMPT = (
@@ -48,11 +53,23 @@ _SYSTEM_PROMPT = (
 )
 
 
+def _dedup_consecutive(lines: list[str]) -> list[str]:
+    """Remove consecutive duplicate lines (terminal redraws)."""
+    if not lines:
+        return lines
+    result = [lines[0]]
+    for line in lines[1:]:
+        if line.strip() != result[-1].strip():
+            result.append(line)
+    return result
+
+
 def preprocess_output(raw: str) -> str:
     """Strip ANSI codes, filter noise, and take the last ~10K chars of meaningful content."""
     cleaned = _ANSI_RE.sub("", raw)
     lines = [ln for ln in cleaned.splitlines() if ln.strip()]
     meaningful = [ln for ln in lines if not _NOISE_RE.match(ln)]
+    meaningful = _dedup_consecutive(meaningful)
     result_lines: list[str] = []
     total = 0
     for line in reversed(meaningful):
@@ -72,6 +89,7 @@ def extract_response_regex(raw: str) -> str:
     cleaned = _ANSI_RE.sub("", raw)
     lines = [ln for ln in cleaned.splitlines() if ln.strip()]
     meaningful = [ln for ln in lines if not _NOISE_RE.match(ln)]
+    meaningful = _dedup_consecutive(meaningful)
     if not meaningful:
         return ""
     tail = [ln[:200] for ln in meaningful[-50:]]
