@@ -213,6 +213,18 @@ class TestExtractPromptText:
         assert "Allow" in result
         assert "\x1b" not in result
 
+    def test_dec_private_mode_stripping(self):
+        output = "\x1b[?2026hAllow this action? Y/n\x1b[?2026l"
+        result = StatusMonitor.extract_prompt_text(output)
+        assert "Allow" in result
+        assert "?2026" not in result
+
+    def test_osc_sequence_stripping(self):
+        output = "\x1b]0;Agent running\x07\nDo you want to continue? Y/n"
+        result = StatusMonitor.extract_prompt_text(output)
+        assert "Do you want" in result
+        assert "Agent running" not in result
+
     def test_do_you_want_prompt(self):
         output = "Installing packages...\nDo you want to continue?"
         result = StatusMonitor.extract_prompt_text(output)
@@ -239,6 +251,25 @@ class TestExtractActivitySummary:
         assert "Compiling main.swift" in result
         assert "Build succeeded" in result
         assert "\x1b" not in result
+
+    def test_strips_dec_private_modes(self):
+        output = "\x1b[?2026hBuild succeeded\x1b[?2026l"
+        result = StatusMonitor.extract_activity_summary(output)
+        assert "Build succeeded" in result
+        assert "?2026" not in result
+
+    def test_strips_osc_sequences(self):
+        output = "\x1b]0;⠂ Building\x07\nCompiled 3 files"
+        result = StatusMonitor.extract_activity_summary(output)
+        assert "Compiled 3 files" in result
+        assert "⠂ Building" not in result
+
+    def test_filters_star_spinner_lines(self):
+        output = "✢ processing\nReal output\n✳ building\n✶ done\n✽ cleaning"
+        result = StatusMonitor.extract_activity_summary(output)
+        assert "Real output" in result
+        assert "✢" not in result
+        assert "✳" not in result
 
     def test_filters_prompt_lines(self):
         output = "Ran 5 tests\nAll passed\n> \n$  \n❯ "
@@ -503,14 +534,6 @@ class TestAttentionTracking:
 
     @pytest.fixture
     def agent(self):
-
-class TestResponseRelay:
-    """Test response relay from pipe-pane logs."""
-
-    @pytest.fixture
-    def agent_with_log(self, tmp_path):
-        log_file = tmp_path / ".agent_output.log"
-        log_file.write_text("Some agent output\nI fixed the bug.\n")
         return Agent(
             id="abc123",
             project_name="test-project",
@@ -614,7 +637,6 @@ class TestResponseRelay:
     @pytest.mark.asyncio
     async def test_parked_reset_on_attention_transitions(self, monitor, agent):
         """Verify that parked is consistently reset to False on attention transitions."""
-        # Test multiple attention-requiring states reset parked
         test_cases = [
             ("idle", "some output\n> "),
             ("error", "Error: test failed"),
@@ -635,6 +657,25 @@ class TestResponseRelay:
             assert agent.parked is False, f"parked should be False after transition to {expected_status}"
             assert agent.needs_attention is True, f"needs_attention should be True after transition to {expected_status}"
 
+
+class TestResponseRelay:
+    """Test response relay from pipe-pane logs."""
+
+    @pytest.fixture
+    def agent_with_log(self, tmp_path):
+        log_file = tmp_path / ".agent_output.log"
+        log_file.write_text("Some agent output\nI fixed the bug.\n")
+        return Agent(
+            id="abc123",
+            project_name="test-project",
+            session_name="forge__test-project__abc123",
+            worktree_path="/tmp/worktree",
+            branch_name="agent/abc123/task",
+            status=AgentStatus.WORKING,
+            created_at=datetime.now(),
+            last_activity=datetime.now(),
+            last_output="previous output",
+            task_description="fix a bug",
             output_log_path=str(log_file),
             last_relay_offset=0,
         )
