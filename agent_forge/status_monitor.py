@@ -287,7 +287,16 @@ class StatusMonitor:
             return ""
 
         # Strip ANSI escape codes
-        ansi_re = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+        ansi_re = re.compile(
+            r"\x1b"
+            r"(?:"
+            r"\[[0-9;?]*[a-zA-Z]"         # CSI (including DEC private modes)
+            r"|\][^\x07]*\x07"            # OSC terminated by BEL
+            r"|\][^\x1b]*\x1b\\"          # OSC terminated by ST
+            r"|[()#][0-9a-zA-Z]"          # Character set / line attrs
+            r"|[a-zA-Z><=]"               # Simple ESC sequences
+            r")"
+        )
         cleaned = ansi_re.sub("", output)
 
         lines = cleaned.rstrip().splitlines()
@@ -326,7 +335,16 @@ class StatusMonitor:
         if not output or not output.strip():
             return ""
 
-        ansi_re = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+        ansi_re = re.compile(
+            r"\x1b"
+            r"(?:"
+            r"\[[0-9;?]*[a-zA-Z]"         # CSI (including DEC private modes)
+            r"|\][^\x07]*\x07"            # OSC terminated by BEL
+            r"|\][^\x1b]*\x1b\\"          # OSC terminated by ST
+            r"|[()#][0-9a-zA-Z]"          # Character set / line attrs
+            r"|[a-zA-Z><=]"               # Simple ESC sequences
+            r")"
+        )
         cleaned = ansi_re.sub("", output)
 
         lines = [ln for ln in cleaned.splitlines() if ln.strip()]
@@ -345,7 +363,7 @@ class StatusMonitor:
             r"|^[\s\-]{6,}$"                    # dash-only separator lines
             r"|^\s*⏵"                           # Claude Code UI chrome (bypass toggle)
             r"|^\s*[❯>]\s+\S"                  # Claude Code tool invocations (❯ command)
-            r"|^\s*✻"                           # Claude Code thinking/churning indicator
+            r"|^\s*[✢-✿]"                           # Claude Code thinking/churning indicator
         )
         meaningful = [ln for ln in tail if not noise_re.match(ln)]
         if not meaningful:

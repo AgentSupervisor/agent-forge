@@ -9,7 +9,16 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+_ANSI_RE = re.compile(
+    r"\x1b"
+    r"(?:"
+    r"\[[0-9;?]*[a-zA-Z]"         # CSI sequences (including DEC private modes like ?2026h)
+    r"|\][^\x07]*\x07"            # OSC terminated by BEL (e.g. window title)
+    r"|\][^\x1b]*\x1b\\"          # OSC terminated by ST (ESC \)
+    r"|[()#][0-9a-zA-Z]"          # Character set / line attrs
+    r"|[a-zA-Z><=]"               # Simple ESC sequences
+    r")"
+)
 
 _NOISE_RE = re.compile(
     r"^\s*[>❯$#]\s*$"
@@ -19,7 +28,7 @@ _NOISE_RE = re.compile(
     r"|^[\s\-]{6,}$"
     r"|^\s*⏵"
     r"|^\s*[❯>]\s+\S"
-    r"|^\s*✻"
+    r"|^\s*[✢-✿]"
 )
 
 _SYSTEM_PROMPT = (
