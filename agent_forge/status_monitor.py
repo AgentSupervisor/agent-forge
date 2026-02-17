@@ -67,6 +67,7 @@ class StatusMonitor:
         self.config = config
         self._running = False
         self._task: asyncio.Task | None = None
+        self._resized_sessions: set[str] = set()
         self.metrics_collector: object | None = None
         self._last_metrics_collect: float = 0.0
 
@@ -113,7 +114,12 @@ class StatusMonitor:
             if agent.status == AgentStatus.STOPPED:
                 continue
 
-            output = tmux_utils.capture_pane(agent.session_name, lines=100)
+            # Resize legacy sessions that were created with default 80-column width
+            if agent.session_name not in self._resized_sessions:
+                tmux_utils.resize_window(agent.session_name)
+                self._resized_sessions.add(agent.session_name)
+
+            output = tmux_utils.capture_pane(agent.session_name, lines=5000)
 
             if not tmux_utils.session_exists(agent.session_name):
                 old_status = agent.status
