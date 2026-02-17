@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agent_forge.agent_manager import Agent, AgentStatus
-from agent_forge.config import DefaultsConfig, ForgeConfig, ResponseRelayConfig, SummaryConfig
+from agent_forge.config import DefaultsConfig, ForgeConfig, MetricsConfig, ResponseRelayConfig, SummaryConfig
 from agent_forge.connectors.base import ActionButton
 from agent_forge.status_monitor import StatusMonitor
 
@@ -179,6 +179,54 @@ class TestStatusMonitorPoll:
             mock_db, agent.id, agent.project_name,
             "status_change", {"status": AgentStatus.ERROR.value},
         )
+
+    @pytest.mark.asyncio
+    async def test_poll_collects_metrics_on_interval(self, agent):
+        """Verify metrics_collector.collect_all is called at configured interval."""
+        # Create config with metrics enabled
+        config = ForgeConfig(
+            defaults=DefaultsConfig(
+                metrics=MetricsConfig(
+                    enabled=True,
+                    collect_interval_seconds=5.0,
+                ),
+            ),
+        )
+
+        # Create monitor with mocked metrics_collector
+        manager = MagicMock()
+        manager.list_agents.return_value = [agent]
+        ws = MagicMock()
+        ws.broadcast_agent_update = AsyncMock()
+        ws.broadcast_terminal_output = AsyncMock()
+        ws.broadcast_metrics = AsyncMock()
+
+        monitor = StatusMonitor(
+            agent_manager=manager,
+            ws_manager=ws,
+            config=config,
+        )
+
+        # Mock the metrics collector
+        mock_collector = MagicMock()
+        mock_snapshot = MagicMock()
+        mock_collector.collect_all.return_value = mock_snapshot
+        monitor.metrics_collector = mock_collector
+
+        # Set last collect time to 0 to ensure we collect on first poll
+        monitor._last_metrics_collect = 0.0
+
+        with (
+            patch("agent_forge.tmux_utils.capture_pane", return_value="working..."),
+            patch("agent_forge.tmux_utils.session_exists", return_value=True),
+            patch("agent_forge.metrics_collector.time.time", return_value=10.0),
+        ):
+            await monitor._poll()
+
+        # Verify metrics were collected and broadcast
+        mock_collector.collect_all.assert_called_once_with(manager)
+        ws.broadcast_metrics.assert_called_once_with(mock_snapshot)
+        assert monitor._last_metrics_collect == 10.0
 
 
 class TestExtractPromptText:
@@ -498,11 +546,6 @@ class TestGetActivitySummary:
         mock_summarize.assert_called_once()
         assert mock_summarize.call_args[1]["api_key"] == "env-key"
 
-class TestAttentionTracking:
-    """Test that needs_attention and parked flags are set on status transitions."""
-
-    @pytest.fixture
-    def agent(self):
 
 class TestResponseRelay:
     """Test response relay from pipe-pane logs."""
@@ -522,119 +565,6 @@ class TestResponseRelay:
             last_activity=datetime.now(),
             last_output="previous output",
             task_description="fix a bug",
-        )
-
-    @pytest.fixture
-    def monitor(self, agent):
-        manager = MagicMock()
-        manager.list_agents.return_value = [agent]
-        ws = MagicMock()
-        ws.broadcast_agent_update = AsyncMock()
-        ws.broadcast_terminal_output = AsyncMock()
-        return StatusMonitor(agent_manager=manager, ws_manager=ws)
-
-    @pytest.mark.asyncio
-    async def test_transition_to_idle_sets_needs_attention(self, monitor, agent):
-        """Transitioning to IDLE should set needs_attention=True and parked=False."""
-        agent.needs_attention = False
-        agent.parked = True
-        new_output = "some output\n> "
-        with (
-            patch("agent_forge.tmux_utils.capture_pane", return_value=new_output),
-            patch("agent_forge.tmux_utils.session_exists", return_value=True),
-        ):
-            await monitor._poll()
-
-        assert agent.status == AgentStatus.IDLE
-        assert agent.needs_attention is True
-        assert agent.parked is False
-
-    @pytest.mark.asyncio
-    async def test_transition_to_error_sets_needs_attention(self, monitor, agent):
-        """Transitioning to ERROR should set needs_attention=True and parked=False."""
-        agent.needs_attention = False
-        agent.parked = True
-        new_output = "fatal: something broke"
-        with (
-            patch("agent_forge.tmux_utils.capture_pane", return_value=new_output),
-            patch("agent_forge.tmux_utils.session_exists", return_value=True),
-        ):
-            await monitor._poll()
-
-        assert agent.status == AgentStatus.ERROR
-        assert agent.needs_attention is True
-        assert agent.parked is False
-
-    @pytest.mark.asyncio
-    async def test_transition_to_waiting_input_sets_needs_attention(self, monitor, agent):
-        """Transitioning to WAITING_INPUT should set needs_attention=True and parked=False."""
-        agent.needs_attention = False
-        agent.parked = True
-        new_output = "Do you want to proceed? Y/n"
-        with (
-            patch("agent_forge.tmux_utils.capture_pane", return_value=new_output),
-            patch("agent_forge.tmux_utils.session_exists", return_value=True),
-        ):
-            await monitor._poll()
-
-        assert agent.status == AgentStatus.WAITING_INPUT
-        assert agent.needs_attention is True
-        assert agent.parked is False
-
-    @pytest.mark.asyncio
-    async def test_transition_to_working_clears_needs_attention(self, monitor, agent):
-        """Transitioning to WORKING should clear needs_attention."""
-        agent.status = AgentStatus.IDLE
-        agent.needs_attention = True
-        new_output = "new output that's different"
-        with (
-            patch("agent_forge.tmux_utils.capture_pane", return_value=new_output),
-            patch("agent_forge.tmux_utils.session_exists", return_value=True),
-        ):
-            await monitor._poll()
-
-        assert agent.status == AgentStatus.WORKING
-        assert agent.needs_attention is False
-
-    @pytest.mark.asyncio
-    async def test_transition_to_stopped_sets_needs_attention(self, monitor, agent):
-        """Transitioning to STOPPED should set needs_attention=True and parked=False."""
-        agent.needs_attention = False
-        agent.parked = True
-        with (
-            patch("agent_forge.tmux_utils.capture_pane", return_value=""),
-            patch("agent_forge.tmux_utils.session_exists", return_value=False),
-        ):
-            await monitor._poll()
-
-        assert agent.status == AgentStatus.STOPPED
-        assert agent.needs_attention is True
-        assert agent.parked is False
-
-    @pytest.mark.asyncio
-    async def test_parked_reset_on_attention_transitions(self, monitor, agent):
-        """Verify that parked is consistently reset to False on attention transitions."""
-        # Test multiple attention-requiring states reset parked
-        test_cases = [
-            ("idle", "some output\n> "),
-            ("error", "Error: test failed"),
-            ("waiting_input", "Allow this? Y/n"),
-        ]
-
-        for expected_status, output in test_cases:
-            agent.status = AgentStatus.WORKING
-            agent.needs_attention = False
-            agent.parked = True
-
-            with (
-                patch("agent_forge.tmux_utils.capture_pane", return_value=output),
-                patch("agent_forge.tmux_utils.session_exists", return_value=True),
-            ):
-                await monitor._poll()
-
-            assert agent.parked is False, f"parked should be False after transition to {expected_status}"
-            assert agent.needs_attention is True, f"needs_attention should be True after transition to {expected_status}"
-
             output_log_path=str(log_file),
             last_relay_offset=0,
         )

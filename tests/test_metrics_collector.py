@@ -1,0 +1,362 @@
+"""Tests for MetricsCollector — system and per-agent metrics collection."""
+
+from unittest.mock import MagicMock, patch
+
+import psutil
+import pytest
+
+from agent_forge.agent_manager import Agent, AgentStatus
+from agent_forge.config import MetricsConfig
+from agent_forge.metrics_collector import (
+    AgentMetrics,
+    MetricsCollector,
+    MetricsSnapshot,
+    SystemMetrics,
+)
+
+
+class TestCollectSystemMetrics:
+    """Test system-wide metrics collection."""
+
+    @patch("agent_forge.metrics_collector.time.time")
+    @patch("agent_forge.metrics_collector.os.getloadavg", return_value=(1.5, 1.2, 0.8))
+    @patch("agent_forge.metrics_collector.psutil")
+    def test_collect_system_metrics(self, mock_psutil, mock_loadavg, mock_time):
+        """Verify all SystemMetrics fields are populated correctly."""
+        # Configure mock psutil
+        mock_psutil.cpu_percent.return_value = 45.2
+        mock_psutil.virtual_memory.return_value = MagicMock(
+            percent=67.8,
+            used=10 * 1024 * 1024 * 1024,
+            total=16 * 1024 * 1024 * 1024,
+        )
+        mock_psutil.disk_usage.return_value = MagicMock(
+            percent=55.3,
+            used=200 * 1024 * 1024 * 1024,
+            total=500 * 1024 * 1024 * 1024,
+        )
+        mock_psutil.net_io_counters.return_value = MagicMock(
+            bytes_sent=1000 * 1024 * 1024,
+            bytes_recv=2000 * 1024 * 1024,
+        )
+
+        # Mock time for initialization and first collect
+        mock_time.return_value = 0.0
+        collector = MetricsCollector(enable_gpu=False)
+
+        # Second call to compute network delta
+        mock_psutil.net_io_counters.return_value = MagicMock(
+            bytes_sent=1010 * 1024 * 1024,
+            bytes_recv=2020 * 1024 * 1024,
+        )
+        mock_time.return_value = 1.0
+        metrics = collector.collect_system()
+
+        assert metrics.cpu_percent == 45.2
+        assert metrics.memory_percent == 67.8
+        assert metrics.memory_used_mb == pytest.approx(10 * 1024, rel=0.01)
+        assert metrics.memory_total_mb == pytest.approx(16 * 1024, rel=0.01)
+        assert metrics.disk_percent == 55.3
+        assert metrics.disk_used_gb == pytest.approx(200, rel=0.01)
+        assert metrics.disk_total_gb == pytest.approx(500, rel=0.01)
+        assert metrics.load_avg_1min == 1.5
+        assert metrics.load_avg_5min == 1.2
+        assert metrics.load_avg_15min == 0.8
+        # Network throughput computed from delta: 10 MB / 1 sec = 10 MB/s
+        assert metrics.network_sent_mbps == pytest.approx(10.0, rel=0.01)
+        assert metrics.network_recv_mbps == pytest.approx(20.0, rel=0.01)
+        # GPU fields should be None
+        assert metrics.gpu_name is None
+        assert metrics.gpu_utilization is None
+        assert metrics.gpu_memory_used_mb is None
+        assert metrics.gpu_memory_total_mb is None
+        assert metrics.gpu_temperature is None
+
+    @patch("agent_forge.metrics_collector.os.getloadavg", return_value=(1.5, 1.2, 0.8))
+    @patch("agent_forge.metrics_collector.psutil")
+    def test_collect_system_metrics_no_gpu(self, mock_psutil, mock_loadavg):
+        """Verify GPU fields are None when pynvml unavailable."""
+        mock_psutil.cpu_percent.return_value = 30.0
+        mock_psutil.virtual_memory.return_value = MagicMock(
+            percent=50.0,
+            used=8 * 1024 * 1024 * 1024,
+            total=16 * 1024 * 1024 * 1024,
+        )
+        mock_psutil.disk_usage.return_value = MagicMock(
+            percent=40.0,
+            used=100 * 1024 * 1024 * 1024,
+            total=250 * 1024 * 1024 * 1024,
+        )
+        mock_psutil.net_io_counters.return_value = MagicMock(
+            bytes_sent=500 * 1024 * 1024,
+            bytes_recv=1000 * 1024 * 1024,
+        )
+
+        collector = MetricsCollector(enable_gpu=False)
+        metrics = collector.collect_system()
+
+        assert metrics.gpu_name is None
+        assert metrics.gpu_utilization is None
+        assert metrics.gpu_memory_used_mb is None
+        assert metrics.gpu_memory_total_mb is None
+        assert metrics.gpu_temperature is None
+
+
+class TestCollectAgentMetrics:
+    """Test per-agent metrics collection."""
+
+    @patch("agent_forge.metrics_collector.psutil")
+    @patch("agent_forge.metrics_collector.subprocess.run")
+    def test_collect_agent_metrics_found(self, mock_subprocess, mock_psutil):
+        """Get pane PID via tmux, walk process tree, verify aggregation."""
+        agent = Agent(
+            id="abc123",
+            project_name="test-project",
+            session_name="forge__test-project__abc123",
+            worktree_path="/tmp/worktree",
+            branch_name="agent/abc123/task",
+            status=AgentStatus.WORKING,
+        )
+
+        # tmux list-panes returns pane PID
+        mock_subprocess.return_value = MagicMock(returncode=0, stdout="1234\n")
+
+        # Root process and its children
+        mock_child1 = MagicMock(pid=1235)
+        mock_child2 = MagicMock(pid=1236)
+        mock_root = MagicMock()
+        mock_root.children.return_value = [mock_child1, mock_child2]
+
+        def make_proc(pid):
+            if pid == 1234:
+                p = MagicMock()
+                p.children.return_value = [mock_child1, mock_child2]
+                p.cpu_percent.return_value = 10.0
+                p.memory_info.return_value = MagicMock(rss=100 * 1024 * 1024)
+                p.status.return_value = "running"
+                return p
+            elif pid == 1235:
+                p = MagicMock()
+                p.cpu_percent.return_value = 5.0
+                p.memory_info.return_value = MagicMock(rss=50 * 1024 * 1024)
+                p.status.return_value = "running"
+                return p
+            elif pid == 1236:
+                p = MagicMock()
+                p.cpu_percent.return_value = 3.0
+                p.memory_info.return_value = MagicMock(rss=30 * 1024 * 1024)
+                p.status.return_value = "running"
+                return p
+
+        mock_psutil.Process.side_effect = make_proc
+        mock_psutil.NoSuchProcess = psutil.NoSuchProcess
+        mock_psutil.AccessDenied = psutil.AccessDenied
+
+        collector = MetricsCollector(enable_gpu=False)
+        # First call warms up the cache (cpu_percent returns 0 on first call)
+        collector.collect_agent(agent)
+        # Second call gets real values
+        metrics = collector.collect_agent(agent)
+
+        assert metrics is not None
+        assert metrics.agent_id == "abc123"
+        assert metrics.process_count == 3
+        assert metrics.cpu_percent == 18.0  # 10 + 5 + 3
+        assert metrics.memory_mb == pytest.approx(180, rel=0.01)  # 100 + 50 + 30
+
+    @patch("agent_forge.metrics_collector.psutil")
+    @patch("agent_forge.metrics_collector.subprocess.run")
+    def test_collect_agent_metrics_no_session(self, mock_subprocess, mock_psutil):
+        """No tmux session returns metrics with 0 counts."""
+        agent = Agent(
+            id="xyz789",
+            project_name="test-project",
+            session_name="forge__test-project__xyz789",
+            worktree_path="/tmp/worktree",
+            branch_name="agent/xyz789/task",
+            status=AgentStatus.WORKING,
+        )
+
+        # tmux list-panes fails (session doesn't exist)
+        mock_subprocess.return_value = MagicMock(returncode=1, stdout="")
+        mock_psutil.NoSuchProcess = psutil.NoSuchProcess
+        mock_psutil.AccessDenied = psutil.AccessDenied
+
+        collector = MetricsCollector(enable_gpu=False)
+        metrics = collector.collect_agent(agent)
+
+        assert metrics is not None
+        assert metrics.agent_id == "xyz789"
+        assert metrics.process_count == 0
+        assert metrics.cpu_percent == 0.0
+        assert metrics.memory_mb == 0.0
+
+    @patch("agent_forge.metrics_collector.psutil")
+    @patch("agent_forge.metrics_collector.subprocess.run")
+    def test_collect_agent_metrics_access_denied(self, mock_subprocess, mock_psutil):
+        """psutil.AccessDenied handled gracefully."""
+        agent = Agent(
+            id="def456",
+            project_name="test-project",
+            session_name="forge__test-project__def456",
+            worktree_path="/tmp/worktree",
+            branch_name="agent/def456/task",
+            status=AgentStatus.WORKING,
+        )
+
+        # tmux returns a PID
+        mock_subprocess.return_value = MagicMock(returncode=0, stdout="1234\n")
+        # But psutil.Process raises AccessDenied
+        mock_psutil.Process.side_effect = psutil.AccessDenied("test")
+        mock_psutil.NoSuchProcess = psutil.NoSuchProcess
+        mock_psutil.AccessDenied = psutil.AccessDenied
+
+        collector = MetricsCollector(enable_gpu=False)
+        metrics = collector.collect_agent(agent)
+
+        assert metrics is not None
+        assert metrics.process_count == 0
+
+
+class TestCollectAll:
+    """Test integration of system + agent metrics."""
+
+    @patch("agent_forge.metrics_collector.os.getloadavg", return_value=(1.0, 0.9, 0.8))
+    @patch("agent_forge.metrics_collector.psutil")
+    @patch("agent_forge.metrics_collector.subprocess.run")
+    def test_collect_all(self, mock_subprocess, mock_psutil, mock_loadavg):
+        """Verify MetricsSnapshot structure."""
+        # Mock system metrics
+        mock_psutil.cpu_percent.return_value = 40.0
+        mock_psutil.virtual_memory.return_value = MagicMock(
+            percent=60.0,
+            used=8 * 1024 * 1024 * 1024,
+            total=16 * 1024 * 1024 * 1024,
+        )
+        mock_psutil.disk_usage.return_value = MagicMock(
+            percent=50.0,
+            used=100 * 1024 * 1024 * 1024,
+            total=200 * 1024 * 1024 * 1024,
+        )
+        mock_psutil.net_io_counters.return_value = MagicMock(
+            bytes_sent=1000 * 1024 * 1024,
+            bytes_recv=2000 * 1024 * 1024,
+        )
+
+        # Mock tmux list-panes: agent1 has a session, agent2 is stopped (won't be queried)
+        def subprocess_side_effect(*args, **kwargs):
+            cmd = args[0] if args else kwargs.get("args", [])
+            if "forge__project__agent1" in cmd:
+                return MagicMock(returncode=0, stdout="1234\n")
+            return MagicMock(returncode=1, stdout="")
+
+        mock_subprocess.side_effect = subprocess_side_effect
+
+        # Mock process tree for agent1's pane PID
+        mock_process_instance = MagicMock()
+        mock_process_instance.children.return_value = []
+        mock_process_instance.cpu_percent.return_value = 8.0
+        mock_process_instance.memory_info.return_value = MagicMock(rss=80 * 1024 * 1024)
+        mock_process_instance.status.return_value = "running"
+
+        mock_psutil.Process.return_value = mock_process_instance
+        mock_psutil.NoSuchProcess = psutil.NoSuchProcess
+        mock_psutil.AccessDenied = psutil.AccessDenied
+
+        # Create mock agent manager
+        agent1 = Agent(
+            id="agent1",
+            project_name="project",
+            session_name="forge__project__agent1",
+            worktree_path="/tmp/worktree",
+            branch_name="agent/agent1/task",
+            status=AgentStatus.WORKING,
+        )
+        agent2 = Agent(
+            id="agent2",
+            project_name="project",
+            session_name="forge__project__agent2",
+            worktree_path="/tmp/worktree",
+            branch_name="agent/agent2/task",
+            status=AgentStatus.STOPPED,
+        )
+
+        mock_manager = MagicMock()
+        mock_manager.list_agents.return_value = [agent1, agent2]
+
+        collector = MetricsCollector(enable_gpu=False)
+        # First call warms up the cache
+        with patch("agent_forge.metrics_collector.time.time", return_value=1234567889.0):
+            collector.collect_all(mock_manager)
+        # Second call gets real values
+        with patch("agent_forge.metrics_collector.time.time", return_value=1234567890.0):
+            snapshot = collector.collect_all(mock_manager)
+
+        assert isinstance(snapshot, MetricsSnapshot)
+        assert snapshot.timestamp == 1234567890.0
+        assert isinstance(snapshot.system, SystemMetrics)
+        assert snapshot.system.cpu_percent == 40.0
+        # Only agent1 should be included (agent2 is STOPPED)
+        assert len(snapshot.agents) == 1
+        assert "agent1" in snapshot.agents
+        assert "agent2" not in snapshot.agents
+        assert snapshot.total_agents_running == 1
+        assert snapshot.total_agent_memory_mb == pytest.approx(80, rel=0.01)
+
+
+class TestNetworkThroughputDelta:
+    """Test network throughput delta computation."""
+
+    @patch("agent_forge.metrics_collector.os.getloadavg", return_value=(1.0, 1.0, 1.0))
+    @patch("agent_forge.metrics_collector.psutil")
+    def test_network_throughput_delta(self, mock_psutil, mock_loadavg):
+        """Verify second call computes correct delta from net_io_counters."""
+        mock_psutil.cpu_percent.return_value = 30.0
+        mock_psutil.virtual_memory.return_value = MagicMock(
+            percent=50.0, used=8 * 1024**3, total=16 * 1024**3,
+        )
+        mock_psutil.disk_usage.return_value = MagicMock(
+            percent=40.0, used=100 * 1024**3, total=250 * 1024**3,
+        )
+
+        # First call baseline
+        mock_psutil.net_io_counters.return_value = MagicMock(
+            bytes_sent=1000 * 1024 * 1024,  # 1000 MB
+            bytes_recv=2000 * 1024 * 1024,  # 2000 MB
+        )
+
+        collector = MetricsCollector(enable_gpu=False)
+
+        # First collect (should have baseline but no delta yet)
+        with patch("agent_forge.metrics_collector.time.time", return_value=100.0):
+            metrics1 = collector.collect_system()
+
+        # Network should be 0 or close to 0 on first call
+        assert metrics1.network_sent_mbps >= 0
+        assert metrics1.network_recv_mbps >= 0
+
+        # Second call with delta
+        mock_psutil.net_io_counters.return_value = MagicMock(
+            bytes_sent=1050 * 1024 * 1024,  # +50 MB
+            bytes_recv=2100 * 1024 * 1024,  # +100 MB
+        )
+
+        with patch("agent_forge.metrics_collector.time.time", return_value=110.0):
+            metrics2 = collector.collect_system()
+
+        # 50 MB / 10 seconds = 5 MB/s
+        assert metrics2.network_sent_mbps == pytest.approx(5.0, rel=0.01)
+        # 100 MB / 10 seconds = 10 MB/s
+        assert metrics2.network_recv_mbps == pytest.approx(10.0, rel=0.01)
+
+
+class TestMetricsConfigDefaults:
+    """Test MetricsConfig Pydantic defaults."""
+
+    def test_metrics_config_defaults(self):
+        """Verify MetricsConfig defaults."""
+        config = MetricsConfig()
+        assert config.enabled is True
+        assert config.collect_interval_seconds == 5.0
+        assert config.enable_gpu is True
+        assert config.enable_per_agent is True

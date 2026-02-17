@@ -47,6 +47,7 @@ class TelegramConnector(BaseConnector):
         # Commands
         for cmd in ("status", "spawn", "kill", "projects",
                      "approve", "reject", "interrupt", "approve_all",
+                     "attention", "metrics",
                      "help", "commands", "start"):
             self._app.add_handler(CommandHandler(cmd, self._handle_command))
 

@@ -44,6 +44,34 @@
             <span style="color:var(--status-waiting);font-size:14px;">&#128276;</span>
             <span class="stat-value" id="stat-attention">0</span>
         </div>
+        <div style="width:1px; height:24px; background:var(--border); margin:0 4px;"></div>
+        <div class="stat-item stat-metric">
+            <span class="stat-metric-label">CPU</span>
+            <div class="metric-gauge"><div class="metric-gauge-fill low" id="stat-cpu-fill" style="width:0%;"></div></div>
+            <span class="stat-metric-value" id="stat-cpu-val">--</span>
+        </div>
+        <div style="width:1px; height:24px; background:var(--border); margin:0 4px;"></div>
+        <div class="stat-item stat-metric">
+            <span class="stat-metric-label">MEM</span>
+            <div class="metric-gauge"><div class="metric-gauge-fill low" id="stat-mem-fill" style="width:0%;"></div></div>
+            <span class="stat-metric-value" id="stat-mem-val">--</span>
+        </div>
+        <div style="width:1px; height:24px; background:var(--border); margin:0 4px;"></div>
+        <div class="stat-item stat-metric" id="stat-gpu-item" style="display:none;">
+            <span class="stat-metric-label">GPU</span>
+            <div class="metric-gauge"><div class="metric-gauge-fill low" id="stat-gpu-fill" style="width:0%;"></div></div>
+            <span class="stat-metric-value" id="stat-gpu-val">--</span>
+        </div>
+        <div style="width:1px; height:24px; background:var(--border); margin:0 4px;"></div>
+        <div class="stat-item stat-metric">
+            <span class="stat-metric-label">Disk</span>
+            <span class="stat-metric-value" id="stat-disk-val">--</span>
+        </div>
+        <div style="width:1px; height:24px; background:var(--border); margin:0 4px;"></div>
+        <div class="stat-item stat-metric">
+            <span class="stat-metric-label">Net</span>
+            <span class="stat-metric-value" id="stat-net-val">--</span>
+        </div>
         <div style="flex:1;"></div>
         <button class="btn btn-primary btn-sm" @click="spawnModalOpen = true">
             + Spawn Agent <span class="kbd" style="margin-left:6px;">&#8984;K</span>
@@ -90,6 +118,12 @@
                     <div class="meta-item" title="Sub-agents" id="sub-{{ agent.id }}">
                         <span>&#9679;</span>
                         <span>{{ agent.sub_agent_count }} sub</span>
+                    </div>
+                    <div class="meta-item agent-metric" id="agent-cpu-{{ agent.id }}" style="display:none;" title="Agent CPU">
+                        <span class="agent-cpu-val">--%</span>
+                    </div>
+                    <div class="meta-item agent-metric" id="agent-mem-{{ agent.id }}" style="display:none;" title="Agent Memory">
+                        <span class="agent-mem-val">-- MB</span>
                     </div>
                 </div>
                 <div class="card-actions" onclick="event.stopPropagation();">
@@ -354,6 +388,12 @@ function addAgentCard(a) {
                 <div class="meta-item" title="Sub-agents" id="sub-${a.id}">
                     <span>&#9679;</span>
                     <span>${a.sub_agent_count || 0} sub</span>
+                </div>
+                <div class="meta-item agent-metric" id="agent-cpu-${a.id}" style="display:none;" title="Agent CPU">
+                    <span class="agent-cpu-val">--%</span>
+                </div>
+                <div class="meta-item agent-metric" id="agent-mem-${a.id}" style="display:none;" title="Agent Memory">
+                    <span class="agent-mem-val">-- MB</span>
                 </div>
             </div>
             <div class="card-actions" onclick="event.stopPropagation();">
