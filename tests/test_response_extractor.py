@@ -19,6 +19,19 @@ class TestPreprocessOutput:
         assert "\x1b" not in result
         assert "Hello" in result
 
+    def test_strips_dec_private_modes(self):
+        raw = "\x1b[?2026hHello\x1b[?2026l world"
+        result = preprocess_output(raw)
+        assert "?2026" not in result
+        assert "Hello" in result
+        assert "world" in result
+
+    def test_strips_osc_sequences(self):
+        raw = "\x1b]0;Window Title\x07Real content here"
+        result = preprocess_output(raw)
+        assert "Window Title" not in result
+        assert "Real content here" in result
+
     def test_filters_noise_lines(self):
         raw = "Real output\n> \n⠋ Loading...\n────────────\nDone."
         result = preprocess_output(raw)
@@ -40,6 +53,15 @@ class TestPreprocessOutput:
         raw = "> \n❯ \n$ \n⠋ spin"
         result = preprocess_output(raw)
         assert result.strip() == ""
+
+    def test_filters_star_spinner_lines(self):
+        raw = "✢ processing...\n✳ building...\nReal output\n✶ done\n✽ cleaning"
+        result = preprocess_output(raw)
+        assert "Real output" in result
+        assert "✢" not in result
+        assert "✳" not in result
+        assert "✶" not in result
+        assert "✽" not in result
 
 
 class TestExtractResponseRegex:
