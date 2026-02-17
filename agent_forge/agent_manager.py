@@ -436,7 +436,8 @@ class AgentManager:
         tmux_utils.kill_session(agent.session_name)
 
         # Remove git worktree
-        subprocess.run(
+        worktree = Path(agent.worktree_path)
+        result = subprocess.run(
             [
                 "git",
                 "-C",
@@ -450,6 +451,21 @@ class AgentManager:
             text=True,
             timeout=10,
         )
+        if result.returncode != 0:
+            logger.warning(
+                "git worktree remove failed for %s: %s",
+                agent_id,
+                result.stderr.strip(),
+            )
+            # Fallback: remove directory and prune stale worktree entries
+            if worktree.exists():
+                shutil.rmtree(str(worktree), ignore_errors=True)
+            subprocess.run(
+                ["git", "-C", str(project_path), "worktree", "prune"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
 
         # Delete the local branch
         subprocess.run(
