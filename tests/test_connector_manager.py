@@ -1030,6 +1030,109 @@ class TestSmartRouting:
         mock_agent_manager.clear_context.assert_not_called()
 
 
+class TestInlineCommands:
+    """Tests for inline commands like @project:agent_id /status."""
+
+    @pytest.mark.asyncio
+    async def test_inline_status_returns_last_response(
+        self, connector_manager, mock_agent_manager
+    ):
+        """@project:agent_id /status should return the agent's last_response."""
+        mock_conn = AsyncMock()
+        mock_conn.send_message = AsyncMock(return_value=True)
+        connector_manager.connectors["my-tg"] = mock_conn
+
+        agent = _make_mock_agent(agent_id="abc123")
+        agent.last_response = "I fixed the login bug and pushed to main."
+        mock_agent_manager.get_agent.return_value = agent
+
+        msg = InboundMessage(
+            connector_id="my-tg",
+            channel_id="-999",
+            sender_id="42",
+            text="@asn-api:abc123 /status",
+        )
+        await connector_manager._handle_inbound(msg)
+
+        # Should NOT forward to agent
+        mock_agent_manager.send_message.assert_not_called()
+        # Should reply with the last response
+        reply = mock_conn.send_message.call_args[0][0].text
+        assert "last response" in reply.lower()
+        assert "I fixed the login bug" in reply
+
+    @pytest.mark.asyncio
+    async def test_inline_status_no_prior_response(
+        self, connector_manager, mock_agent_manager
+    ):
+        """@project:agent_id /status with no prior response shows a helpful message."""
+        mock_conn = AsyncMock()
+        mock_conn.send_message = AsyncMock(return_value=True)
+        connector_manager.connectors["my-tg"] = mock_conn
+
+        agent = _make_mock_agent(agent_id="abc123")
+        agent.last_response = ""
+        mock_agent_manager.get_agent.return_value = agent
+
+        msg = InboundMessage(
+            connector_id="my-tg",
+            channel_id="-999",
+            sender_id="42",
+            text="@asn-api:abc123 /status",
+        )
+        await connector_manager._handle_inbound(msg)
+
+        mock_agent_manager.send_message.assert_not_called()
+        reply = mock_conn.send_message.call_args[0][0].text
+        assert "No response recorded" in reply
+
+    @pytest.mark.asyncio
+    async def test_inline_command_does_not_forward_to_agent(
+        self, connector_manager, mock_agent_manager
+    ):
+        """Inline commands should not be forwarded to the agent."""
+        mock_conn = AsyncMock()
+        mock_conn.send_message = AsyncMock(return_value=True)
+        connector_manager.connectors["my-tg"] = mock_conn
+
+        agent = _make_mock_agent(agent_id="abc123")
+        agent.last_response = "Some response"
+        mock_agent_manager.get_agent.return_value = agent
+
+        msg = InboundMessage(
+            connector_id="my-tg",
+            channel_id="-999",
+            sender_id="42",
+            text="@asn-api:abc123 /status",
+        )
+        await connector_manager._handle_inbound(msg)
+
+        mock_agent_manager.send_message.assert_not_called()
+        mock_agent_manager.send_message_with_media.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_inline_command_still_forwards(
+        self, connector_manager, mock_agent_manager
+    ):
+        """Regular messages that don't start with / should still forward to agent."""
+        mock_conn = AsyncMock()
+        mock_conn.send_message = AsyncMock(return_value=True)
+        connector_manager.connectors["my-tg"] = mock_conn
+
+        agent = _make_mock_agent(agent_id="abc123")
+        mock_agent_manager.get_agent.return_value = agent
+
+        msg = InboundMessage(
+            connector_id="my-tg",
+            channel_id="-999",
+            sender_id="42",
+            text="@asn-api:abc123 Fix the login bug",
+        )
+        await connector_manager._handle_inbound(msg)
+
+        mock_agent_manager.send_message.assert_called_once()
+
+
 class TestReplyRouting:
     """Tests for reply-to-message routing (agent_id extracted by connector)."""
 

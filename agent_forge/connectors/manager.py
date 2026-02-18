@@ -270,6 +270,13 @@ class ConnectorManager:
                 return
             agent, newly_spawned = result
 
+        # Check for inline commands (e.g. @project:agent_id /status)
+        inline_result = await self._handle_inline_command(msg, agent)
+        if inline_result:
+            self._set_context(msg.connector_id, msg.channel_id, agent.id)
+            self._track_reply_channel(msg.connector_id, msg.channel_id, project_name)
+            return
+
         if newly_spawned:
             # Message text is sent via the spawn start sequence.
             # Handle media staging if needed.
@@ -460,6 +467,27 @@ class ConnectorManager:
 
         return None
 
+    async def _handle_inline_command(self, msg: InboundMessage, agent: Any) -> bool:
+        """Check if the message text is an inline command and handle it.
+
+        Returns True if an inline command was handled, False otherwise.
+        """
+        text = msg.text.strip()
+        if not text.startswith("/"):
+            return False
+
+        cmd = text.split()[0].lstrip("/").lower()
+
+        if cmd == "status":
+            if agent.last_response:
+                reply = f"Agent `{agent.id}` ({agent.project_name}) last response:\n\n{agent.last_response}"
+            else:
+                reply = f"Agent `{agent.id}` ({agent.project_name}): No response recorded yet."
+            await self._reply(msg, reply)
+            return True
+
+        return False
+
     async def _handle_command(self, msg: InboundMessage) -> None:
         """Handle platform-agnostic commands (/status, /spawn, /kill, /projects, control)."""
         cmd = msg.command_name.lstrip("/")
@@ -496,6 +524,9 @@ class ConnectorManager:
                 "  You can also send photos, files, and voice messages\n"
                 "  with or without a caption. They'll be staged into\n"
                 "  the agent's worktree.\n"
+                "\n"
+                "INLINE COMMANDS\n"
+                "  @project:agent_id /status — Repeat the agent's last response\n"
                 "\n"
                 "TIPS\n"
                 "  - After messaging an agent, it becomes your active\n"

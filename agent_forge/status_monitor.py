@@ -305,6 +305,8 @@ class StatusMonitor:
         if not response_text:
             return
 
+        agent.last_response = response_text
+
         msg = f"Agent `{agent.id}` ({agent.project_name}) response:\n\n{response_text}"
         await self._notify_channels(agent.project_name, msg)
 
@@ -399,7 +401,10 @@ class StatusMonitor:
             r"|.*\bChannelling\b"               # Claude Code "Channelling…" status
             r"|^\s*⏺\s*$"                       # Claude Code bare status dot (no content after)
             r"|^\s*[·.…↑↓←→]{1,}\s*$"          # terminal artifacts: arrows, dots, middots
+            r"|^\s*·\s+\S+…\s*$"              # Claude Code churning status (e.g. "· Scurrying…")
+            r"|^\s*\S{1,4}\s*$"                 # very short (1-4 char) fragment lines
             r"|^\s*\w+…\s*$"                    # single-word status text ending in …
+            r"|^\s*\w*\(thinking\)\s*$"         # Claude thinking indicator (e.g. "ai(thinking)")
         )
         meaningful = [ln for ln in tail if not noise_re.match(ln)]
         if not meaningful:
