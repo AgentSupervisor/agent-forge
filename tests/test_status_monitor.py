@@ -834,6 +834,14 @@ class TestResponseRelay:
         connector_mgr.send_to_project_channels.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_relay_stores_last_response(self, relay_monitor, agent_with_log):
+        """_relay_response should store response_text on agent.last_response."""
+        assert agent_with_log.last_response == ""
+        await relay_monitor._relay_response(agent_with_log)
+        assert agent_with_log.last_response != ""
+        assert "I fixed the bug." in agent_with_log.last_response
+
+    @pytest.mark.asyncio
     async def test_poll_triggers_relay_on_working_to_idle(
         self, relay_monitor, agent_with_log
     ):

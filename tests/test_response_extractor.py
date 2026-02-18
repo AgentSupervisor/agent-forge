@@ -63,6 +63,34 @@ class TestPreprocessOutput:
         assert "✶" not in result
         assert "✽" not in result
 
+    def test_preserves_text_after_block_marker(self):
+        """⏺ lines with text content should have text preserved, not filtered entirely."""
+        raw = "⏺ Why do programmers prefer dark mode?\n\n  Because light attracts bugs."
+        result = preprocess_output(raw)
+        assert "Why do programmers prefer dark mode?" in result
+        assert "Because light attracts bugs." in result
+
+    def test_bare_block_marker_is_filtered(self):
+        """Bare ⏺ with no text should be filtered."""
+        raw = "⏺\nReal output here"
+        result = preprocess_output(raw)
+        assert "Real output here" in result
+        assert "⏺" not in result
+
+    def test_filters_ai_thinking(self):
+        """ai(thinking) should be filtered as noise."""
+        raw = "Real response text\nai(thinking)\nMore real text"
+        result = preprocess_output(raw)
+        assert "Real response text" in result
+        assert "More real text" in result
+        assert "ai(thinking)" not in result
+
+    def test_filters_bare_thinking(self):
+        """(thinking) should still be filtered."""
+        raw = "Real text\n(thinking)\nMore text"
+        result = preprocess_output(raw)
+        assert "(thinking)" not in result
+
 
 class TestExtractResponseRegex:
     def test_returns_last_50_meaningful_lines(self):
@@ -92,6 +120,20 @@ class TestExtractResponseRegex:
     def test_all_noise_returns_empty(self):
         raw = "> \n❯ \n$ "
         assert extract_response_regex(raw) == ""
+
+    def test_preserves_block_marker_content(self):
+        """⏺ prefixed lines should have their text preserved in regex extraction."""
+        raw = "⏺ Why do programmers prefer dark mode?\n\n  Because light attracts bugs."
+        result = extract_response_regex(raw)
+        assert "Why do programmers prefer dark mode?" in result
+        assert "Because light attracts bugs." in result
+
+    def test_filters_ai_thinking_artifact(self):
+        """ai(thinking) should be filtered from regex extraction output."""
+        raw = "The answer is 42.\nai(thinking)\nThat's the result."
+        result = extract_response_regex(raw)
+        assert "The answer is 42." in result
+        assert "ai(thinking)" not in result
 
 
 class TestExtractResponse:
