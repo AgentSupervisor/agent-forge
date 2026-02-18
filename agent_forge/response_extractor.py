@@ -33,6 +33,10 @@ _NOISE_RE = re.compile(
     r"|^\s*⏺\s*$"                              # Claude Code bare status dot (no content after)
     r"|^\s*[·.…↑↓←→]{1,}\s*$"                 # terminal artifacts: arrows, dots, middots
     r"|^\s*\w+…\s*$"                           # single-word status text ending in …
+    r"|^\s*\(thinking\)\s*$"                   # Claude thinking indicator
+    r"|^\s*Thinking\.*\s*$"                    # Claude "Thinking..." status
+    r"|^\s*claude-\S+\s*$"                     # bare model name lines (e.g. claude-sonnet-4-6)
+    r"|^\s*\d+[,.]?\d*\s*tokens?\s*$"         # token count lines
 )
 
 _SYSTEM_PROMPT = (

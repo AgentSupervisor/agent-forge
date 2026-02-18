@@ -305,6 +305,8 @@ class StatusMonitor:
         if not response_text:
             return
 
+        agent.last_response = response_text
+
         msg = f"Agent `{agent.id}` ({agent.project_name}) response:\n\n{response_text}"
         await self._notify_channels(agent.project_name, msg)
 
