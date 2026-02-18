@@ -30,9 +30,8 @@ _NOISE_RE = re.compile(
     r"|^\s*[❯>]\s+\S"
     r"|^\s*[✢-✿]"
     r"|.*\bChannelling\b"                      # Claude Code "Channelling…" status
-    r"|^\s*⏺"                                  # Claude Code status dot
+    r"|^\s*⏺\s*$"                              # Claude Code bare status dot (no content after)
     r"|^\s*[·.…↑↓←→]{1,}\s*$"                 # terminal artifacts: arrows, dots, middots
-    r"|^\s*\S{1,2}\s*$"                        # very short (1-2 char) fragment lines
     r"|^\s*\w+…\s*$"                           # single-word status text ending in …
 )
 

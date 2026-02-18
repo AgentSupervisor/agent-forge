@@ -582,15 +582,6 @@ class TestAttentionTracking:
 
     @pytest.fixture
     def agent(self):
-        pass
-
-class TestResponseRelay:
-    """Test response relay from pipe-pane logs."""
-
-    @pytest.fixture
-    def agent_with_log(self, tmp_path):
-        log_file = tmp_path / ".agent_output.log"
-        log_file.write_text("Some agent output\nI fixed the bug.\n")
         return Agent(
             id="abc123",
             project_name="test-project",
