@@ -9,6 +9,7 @@ import pytest
 from agent_forge.agent_manager import Agent, AgentStatus
 from agent_forge.config import DefaultsConfig, ForgeConfig, MetricsConfig, ResponseRelayConfig, SummaryConfig
 from agent_forge.connectors.base import ActionButton
+from agent_forge.response_extractor import ExtractionResult
 from agent_forge.status_monitor import StatusMonitor
 
 
@@ -795,7 +796,7 @@ class TestResponseRelay:
             patch(
                 "agent_forge.status_monitor.extract_response",
                 new_callable=AsyncMock,
-                return_value="Extracted response text",
+                return_value=ExtractionResult(text="Extracted response text"),
             ) as mock_extract,
         ):
             await monitor._relay_response(agent_with_log)

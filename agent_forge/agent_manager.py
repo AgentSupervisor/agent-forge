@@ -49,6 +49,7 @@ class Agent:
     output_log_path: str = ""
     last_relay_offset: int = 0
     last_response: str = ""
+    last_user_message: str = ""
 
 
 def _sanitize_for_branch(text: str) -> str:
@@ -678,6 +679,7 @@ class AgentManager:
                 needs_attention=bool(snap.get("needs_attention", False)),
                 parked=bool(snap.get("parked", False)),
                 last_response=snap.get("last_response", ""),
+                last_user_message=snap.get("last_user_message", ""),
             )
             # Restore created_at from snapshot if available
             if snap.get("created_at"):

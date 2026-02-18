@@ -16,7 +16,7 @@ from .agent_manager import AgentManager, AgentStatus
 from .config import ForgeConfig
 from .connectors.base import ActionButton
 from .database import log_event, save_snapshot
-from .response_extractor import extract_response, extract_response_regex
+from .response_extractor import ExtractionResult, extract_response, extract_response_regex
 from .summarizer import summarize_output
 from .websocket_manager import WebSocketManager
 
@@ -192,13 +192,17 @@ class StatusMonitor:
                     logger.exception("Metrics collection failed")
                 self._last_metrics_collect = now
 
-    async def _notify_channels(self, project_name: str, text: str) -> None:
+    async def _notify_channels(
+        self, project_name: str, text: str, media_paths: list[str] | None = None
+    ) -> None:
         """Send status notification to bound IM channels (best-effort)."""
         if not self.connector_manager:
             logger.debug("No connector_manager; skipping notification for %s", project_name)
             return
         try:
-            await self.connector_manager.send_to_project_channels(project_name, text)
+            await self.connector_manager.send_to_project_channels(
+                project_name, text, media_paths=media_paths
+            )
         except Exception:
             logger.exception("Failed to notify channels for %s", project_name)
 
@@ -286,29 +290,36 @@ class StatusMonitor:
         agent.last_relay_offset = file_size
 
         # Try LLM extraction first, then regex fallback
-        response_text = None
+        result: ExtractionResult | None = None
         if self.config:
             relay_cfg = self.config.defaults.response_relay
             api_key = self.config.get_summary_api_key()
             if relay_cfg.enabled and api_key:
-                response_text = await extract_response(
+                result = await extract_response(
                     new_content,
                     api_key=api_key,
                     model=relay_cfg.model,
                     max_tokens=relay_cfg.max_tokens,
                     timeout=relay_cfg.timeout_seconds,
+                    user_question=agent.last_user_message,
                 )
 
-        if not response_text:
-            response_text = extract_response_regex(new_content)
+        if not result:
+            result = extract_response_regex(new_content)
 
-        if not response_text:
+        if not result or not result.text:
             return
 
-        agent.last_response = response_text
+        agent.last_response = result.text
 
-        msg = f"Agent `{agent.id}` ({agent.project_name}) response:\n\n{response_text}"
-        await self._notify_channels(agent.project_name, msg)
+        # Validate file paths — only include paths that exist on disk
+        import os
+        valid_media: list[str] | None = None
+        if result.file_paths:
+            valid_media = [p for p in result.file_paths if os.path.isfile(p)] or None
+
+        msg = f"Agent `{agent.id}` ({agent.project_name}) response:\n\n{result.text}"
+        await self._notify_channels(agent.project_name, msg, media_paths=valid_media)
 
     @staticmethod
     def extract_prompt_text(output: str) -> str:
