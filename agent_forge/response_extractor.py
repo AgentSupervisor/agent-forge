@@ -32,12 +32,16 @@ _NOISE_RE = re.compile(
     r"|.*\bChannelling\b"                      # Claude Code "Channelling…" status
     r"|^\s*⏺\s*$"                              # Claude Code bare status dot (no content after)
     r"|^\s*[·.…↑↓←→]{1,}\s*$"                 # terminal artifacts: arrows, dots, middots
+    r"|^\s*·\s+\S+…\s*$"                      # Claude Code churning status (e.g. "· Scurrying…")
+    r"|^\s*\S{1,4}\s*$"                        # very short (1-4 char) fragment lines
     r"|^\s*\w+…\s*$"                           # single-word status text ending in …
-    r"|^\s*\(thinking\)\s*$"                   # Claude thinking indicator
+    r"|^\s*\w*\(thinking\)\s*$"                # Claude thinking indicator (e.g. "(thinking)", "ai(thinking)")
     r"|^\s*Thinking\.*\s*$"                    # Claude "Thinking..." status
     r"|^\s*claude-\S+\s*$"                     # bare model name lines (e.g. claude-sonnet-4-6)
     r"|^\s*\d+[,.]?\d*\s*tokens?\s*$"         # token count lines
 )
+
+_BLOCK_MARKER_RE = re.compile(r"^\s*⏺\s?")
 
 _SYSTEM_PROMPT = (
     "You are extracting an AI coding agent's response from raw terminal output. "
@@ -71,6 +75,9 @@ def preprocess_output(raw: str) -> str:
     """Strip ANSI codes, filter noise, and take the last ~10K chars of meaningful content."""
     cleaned = _ANSI_RE.sub("", raw)
     lines = [ln for ln in cleaned.splitlines() if ln.strip()]
+    # Strip Claude Code block marker (⏺) prefix — preserve the text that follows
+    lines = [_BLOCK_MARKER_RE.sub("", ln) for ln in lines]
+    lines = [ln for ln in lines if ln.strip()]
     meaningful = [ln for ln in lines if not _NOISE_RE.match(ln)]
     meaningful = _dedup_consecutive(meaningful)
     result_lines: list[str] = []
@@ -91,6 +98,9 @@ def extract_response_regex(raw: str) -> str:
     """
     cleaned = _ANSI_RE.sub("", raw)
     lines = [ln for ln in cleaned.splitlines() if ln.strip()]
+    # Strip Claude Code block marker (⏺) prefix — preserve the text that follows
+    lines = [_BLOCK_MARKER_RE.sub("", ln) for ln in lines]
+    lines = [ln for ln in lines if ln.strip()]
     meaningful = [ln for ln in lines if not _NOISE_RE.match(ln)]
     meaningful = _dedup_consecutive(meaningful)
     if not meaningful:
