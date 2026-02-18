@@ -1,7 +1,6 @@
 """Tests for StatusMonitor.detect_status, polling logic, and prompt extraction."""
 
 from datetime import datetime
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -707,12 +706,10 @@ class TestAttentionTracking:
 
 
 class TestResponseRelay:
-    """Test response relay from pipe-pane logs."""
+    """Test response relay using capture_pane output."""
 
     @pytest.fixture
-    def agent_with_log(self, tmp_path):
-        log_file = tmp_path / ".agent_output.log"
-        log_file.write_text("Some agent output\nI fixed the bug.\n")
+    def agent(self):
         return Agent(
             id="abc123",
             project_name="test-project",
@@ -724,14 +721,12 @@ class TestResponseRelay:
             last_activity=datetime.now(),
             last_output="previous output",
             task_description="fix a bug",
-            output_log_path=str(log_file),
-            last_relay_offset=0,
         )
 
     @pytest.fixture
-    def relay_monitor(self, agent_with_log):
+    def relay_monitor(self, agent):
         manager = MagicMock()
-        manager.list_agents.return_value = [agent_with_log]
+        manager.list_agents.return_value = [agent]
         ws = MagicMock()
         ws.broadcast_agent_update = AsyncMock()
         ws.broadcast_terminal_output = AsyncMock()
@@ -745,8 +740,9 @@ class TestResponseRelay:
         )
 
     @pytest.mark.asyncio
-    async def test_relay_reads_from_log(self, relay_monitor, agent_with_log):
-        await relay_monitor._relay_response(agent_with_log)
+    async def test_relay_extracts_from_capture_pane(self, relay_monitor, agent):
+        output = "Some agent output\nI fixed the bug.\n"
+        await relay_monitor._relay_response(agent, output)
         cm = relay_monitor.connector_manager
         cm.send_to_project_channels.assert_called_once()
         text = cm.send_to_project_channels.call_args[0][1]
@@ -754,27 +750,27 @@ class TestResponseRelay:
         assert "I fixed the bug." in text
 
     @pytest.mark.asyncio
-    async def test_relay_skips_when_no_log_path(self, relay_monitor, agent_with_log):
-        agent_with_log.output_log_path = ""
-        await relay_monitor._relay_response(agent_with_log)
+    async def test_relay_skips_when_no_output(self, relay_monitor, agent):
+        await relay_monitor._relay_response(agent, "")
         relay_monitor.connector_manager.send_to_project_channels.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_relay_skips_when_no_new_content(self, relay_monitor, agent_with_log):
-        log_path = Path(agent_with_log.output_log_path)
-        agent_with_log.last_relay_offset = log_path.stat().st_size
-        await relay_monitor._relay_response(agent_with_log)
+    async def test_relay_skips_when_whitespace_only(self, relay_monitor, agent):
+        await relay_monitor._relay_response(agent, "   \n\n  ")
         relay_monitor.connector_manager.send_to_project_channels.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_relay_updates_offset(self, relay_monitor, agent_with_log):
-        log_path = Path(agent_with_log.output_log_path)
-        expected_size = log_path.stat().st_size
-        await relay_monitor._relay_response(agent_with_log)
-        assert agent_with_log.last_relay_offset == expected_size
+    async def test_relay_skips_duplicate_response(self, relay_monitor, agent):
+        """Should not re-relay the same response on repeated WORKING→IDLE cycles."""
+        output = "Some agent output\nI fixed the bug.\n"
+        await relay_monitor._relay_response(agent, output)
+        relay_monitor.connector_manager.send_to_project_channels.reset_mock()
+        # Second relay with same output should be skipped
+        await relay_monitor._relay_response(agent, output)
+        relay_monitor.connector_manager.send_to_project_channels.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_relay_uses_llm_when_configured(self, agent_with_log):
+    async def test_relay_uses_llm_when_configured(self, agent):
         config = ForgeConfig(
             defaults=DefaultsConfig(
                 response_relay=ResponseRelayConfig(enabled=True),
@@ -798,14 +794,14 @@ class TestResponseRelay:
                 return_value="Extracted response text",
             ) as mock_extract,
         ):
-            await monitor._relay_response(agent_with_log)
+            await monitor._relay_response(agent, "raw terminal output here")
 
         mock_extract.assert_called_once()
         text = connector_mgr.send_to_project_channels.call_args[0][1]
         assert "Extracted response text" in text
 
     @pytest.mark.asyncio
-    async def test_relay_falls_back_to_regex(self, agent_with_log):
+    async def test_relay_falls_back_to_regex(self, agent):
         config = ForgeConfig(
             defaults=DefaultsConfig(
                 response_relay=ResponseRelayConfig(enabled=True),
@@ -829,29 +825,27 @@ class TestResponseRelay:
                 return_value=None,
             ),
         ):
-            await monitor._relay_response(agent_with_log)
+            await monitor._relay_response(agent, "Some output\nI fixed it.\n")
 
         connector_mgr.send_to_project_channels.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_relay_stores_last_response(self, relay_monitor, agent_with_log):
+    async def test_relay_stores_last_response(self, relay_monitor, agent):
         """_relay_response should store response_text on agent.last_response."""
-        assert agent_with_log.last_response == ""
-        await relay_monitor._relay_response(agent_with_log)
-        assert agent_with_log.last_response != ""
-        assert "I fixed the bug." in agent_with_log.last_response
+        assert agent.last_response == ""
+        await relay_monitor._relay_response(agent, "Some output\nI fixed the bug.\n")
+        assert agent.last_response != ""
+        assert "I fixed the bug." in agent.last_response
 
     @pytest.mark.asyncio
-    async def test_poll_triggers_relay_on_working_to_idle(
-        self, relay_monitor, agent_with_log
-    ):
-        new_output = "claude >"
+    async def test_poll_triggers_relay_on_working_to_idle(self, relay_monitor, agent):
+        new_output = "I fixed it.\nclaude >"
         with (
             patch("agent_forge.tmux_utils.capture_pane", return_value=new_output),
             patch("agent_forge.tmux_utils.session_exists", return_value=True),
         ):
             await relay_monitor._poll()
 
-        assert agent_with_log.status == AgentStatus.IDLE
+        assert agent.status == AgentStatus.IDLE
         cm = relay_monitor.connector_manager
         cm.send_to_project_channels.assert_called_once()
