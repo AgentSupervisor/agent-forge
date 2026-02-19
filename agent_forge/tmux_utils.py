@@ -110,14 +110,47 @@ def kill_session(name: str) -> bool:
 def send_keys(session_name: str, text: str, enter: bool = True) -> bool:
     """Send keystrokes to a tmux session.
 
-    For multi-line text, each line is sent separately with Enter between them.
-    After the final line, two Enters are sent if *enter* is True: the first
-    closes the line and the second submits the prompt (Claude Code requirement).
+    For single-line text, ``tmux send-keys`` is used directly.
+
+    For multi-line text, tmux's ``load-buffer`` + ``paste-buffer -p`` approach
+    is used so that the entire text is delivered as a single bracketed paste.
+    This prevents Claude Code (and other TUIs) from interpreting intermediate
+    newlines as prompt submissions: without bracketed paste, each ``\\n`` would
+    trigger an Enter keystroke and submit a partial message.
+
+    After the text is sent, two Enters are issued when *enter* is True: the
+    first closes the current input line and the second submits the prompt
+    (Claude Code requirement).
     """
-    lines = text.split("\n")
-    for i, line in enumerate(lines):
-        # Send this line's text
-        result = _run(["tmux", "send-keys", "-t", session_name, line])
+    if "\n" in text:
+        # Load text into the tmux paste buffer via stdin, then paste with
+        # bracketed-paste mode (-p) and delete the buffer afterwards (-d).
+        load_result = subprocess.run(
+            ["tmux", "load-buffer", "-"],
+            input=text,
+            capture_output=True,
+            text=True,
+            timeout=TMUX_TIMEOUT,
+        )
+        if load_result.returncode != 0:
+            logger.error(
+                "Failed to load tmux buffer for '%s': %s",
+                session_name,
+                load_result.stderr.strip(),
+            )
+            return False
+        paste_result = _run(
+            ["tmux", "paste-buffer", "-t", session_name, "-d", "-p"]
+        )
+        if paste_result.returncode != 0:
+            logger.error(
+                "Failed to paste buffer to '%s': %s",
+                session_name,
+                paste_result.stderr.strip(),
+            )
+            return False
+    else:
+        result = _run(["tmux", "send-keys", "-t", session_name, text])
         if result.returncode != 0:
             logger.error(
                 "Failed to send keys to '%s': %s",
@@ -125,9 +158,7 @@ def send_keys(session_name: str, text: str, enter: bool = True) -> bool:
                 result.stderr.strip(),
             )
             return False
-        # Press Enter between lines (not after the last one — that's handled below)
-        if i < len(lines) - 1:
-            _run(["tmux", "send-keys", "-t", session_name, "Enter"])
+
     if enter:
         # Two Enters: first closes the line, second submits the prompt
         _run(["tmux", "send-keys", "-t", session_name, "Enter"])
