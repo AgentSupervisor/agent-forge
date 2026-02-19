@@ -135,7 +135,10 @@ class AgentManager:
         2. Project-specific agent_instructions
         3. Profile instructions
         4. Context files inlined from the project
-        5. Existing CLAUDE.md content (preserved at the end)
+
+        When any layer produces content, the generated output is written as the
+        authoritative CLAUDE.md, overwriting whatever was already in the worktree.
+        If all layers are empty, the file is left untouched.
         """
         config = self.registry.config
         project = config.projects.get(project_name)
@@ -177,18 +180,8 @@ class AgentManager:
 
         generated = "\n\n".join(sections)
 
-        # Preserve existing CLAUDE.md
         claude_md_path = worktree_dir / "CLAUDE.md"
-        existing = ""
-        if claude_md_path.exists():
-            existing = claude_md_path.read_text().strip()
-
-        if existing:
-            final = f"{generated}\n\n---\n\n{existing}\n"
-        else:
-            final = f"{generated}\n"
-
-        claude_md_path.write_text(final)
+        claude_md_path.write_text(f"{generated}\n")
         logger.info("Generated CLAUDE.md in %s (%d layers)", worktree_dir, len(sections))
 
     def _get_start_sequence(
