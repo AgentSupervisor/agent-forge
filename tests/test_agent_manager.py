@@ -640,3 +640,217 @@ class TestAttentionFields:
         assert agent.parked is True
         agent.needs_attention = False
         assert agent.needs_attention is False
+
+
+class TestPowerFailureRecovery:
+    """Tests for recovery after full system restart (no tmux, worktree persists)."""
+
+    @pytest.fixture
+    def manager(self, registry):
+        defaults = DefaultsConfig(
+            max_agents_per_project=5,
+            claude_command="echo",
+            poll_interval_seconds=1.0,
+        )
+        return AgentManager(registry=registry, defaults=defaults)
+
+    @pytest.mark.asyncio
+    async def test_recovers_orphaned_agent(self, manager, tmp_git_repo):
+        """Agent with DB snapshot, no tmux, but worktree on disk is recovered."""
+        from unittest.mock import AsyncMock
+
+        # Create the worktree directory on disk
+        worktree_dir = tmp_git_repo / ".worktrees" / "abc123"
+        worktree_dir.mkdir(parents=True)
+
+        snapshot_rows = [
+            {
+                "agent_id": "abc123",
+                "project_name": "test-project",
+                "session_name": "forge__test-project__abc123",
+                "worktree_path": str(worktree_dir),
+                "branch_name": "agent/abc123/fix-bug",
+                "status": "working",
+                "task_description": "fix the login bug",
+                "created_at": "2026-01-15T10:00:00",
+                "last_activity": "2026-01-15T11:00:00",
+                "last_output": "",
+                "needs_attention": 0,
+                "parked": 0,
+                "last_response": "",
+                "last_user_message": "please fix the login form",
+                "profile": "",
+            }
+        ]
+
+        manager._db = MagicMock()
+        with (
+            # No tmux sessions exist (computer restarted)
+            patch("agent_forge.tmux_utils.list_sessions", return_value=[]),
+            patch("agent_forge.database.load_snapshots", new_callable=AsyncMock, return_value=snapshot_rows),
+            patch("agent_forge.tmux_utils.create_session", return_value=True) as mock_create,
+            patch("agent_forge.tmux_utils.enable_pipe_pane", return_value=True),
+            patch("agent_forge.database.log_event", new_callable=AsyncMock) as mock_log,
+        ):
+            await manager.recover_sessions()
+
+        assert "abc123" in manager.agents
+        agent = manager.agents["abc123"]
+        assert agent.status == AgentStatus.STARTING
+        assert agent.task_description == "fix the login bug"
+        assert agent.branch_name == "agent/abc123/fix-bug"
+        assert agent.last_user_message == "please fix the login form"
+        assert agent.needs_attention is True
+        mock_create.assert_called_once()
+        mock_log.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_stopped_agents(self, manager, tmp_git_repo):
+        """Agents with STOPPED status are not recovered (intentionally killed)."""
+        from unittest.mock import AsyncMock
+
+        worktree_dir = tmp_git_repo / ".worktrees" / "def456"
+        worktree_dir.mkdir(parents=True)
+
+        snapshot_rows = [
+            {
+                "agent_id": "def456",
+                "project_name": "test-project",
+                "session_name": "forge__test-project__def456",
+                "worktree_path": str(worktree_dir),
+                "branch_name": "agent/def456/done",
+                "status": "stopped",
+                "task_description": "already done",
+                "created_at": "2026-01-15T10:00:00",
+                "last_activity": "2026-01-15T11:00:00",
+                "last_output": "",
+                "needs_attention": 0,
+                "parked": 0,
+                "last_response": "",
+                "last_user_message": "",
+                "profile": "",
+            }
+        ]
+
+        manager._db = MagicMock()
+        with (
+            patch("agent_forge.tmux_utils.list_sessions", return_value=[]),
+            patch("agent_forge.database.load_snapshots", new_callable=AsyncMock, return_value=snapshot_rows),
+            patch("agent_forge.tmux_utils.create_session") as mock_create,
+        ):
+            await manager.recover_sessions()
+
+        assert "def456" not in manager.agents
+        mock_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_missing_worktree(self, manager, tmp_git_repo):
+        """Agents whose worktree no longer exists are cleaned up, not recovered."""
+        from unittest.mock import AsyncMock
+
+        snapshot_rows = [
+            {
+                "agent_id": "ghi789",
+                "project_name": "test-project",
+                "session_name": "forge__test-project__ghi789",
+                "worktree_path": "/nonexistent/path/ghi789",
+                "branch_name": "agent/ghi789/gone",
+                "status": "idle",
+                "task_description": "something",
+                "created_at": "2026-01-15T10:00:00",
+                "last_activity": "2026-01-15T11:00:00",
+                "last_output": "",
+                "needs_attention": 0,
+                "parked": 0,
+                "last_response": "",
+                "last_user_message": "",
+                "profile": "",
+            }
+        ]
+
+        manager._db = MagicMock()
+        with (
+            patch("agent_forge.tmux_utils.list_sessions", return_value=[]),
+            patch("agent_forge.database.load_snapshots", new_callable=AsyncMock, return_value=snapshot_rows),
+            patch("agent_forge.database.delete_snapshot", new_callable=AsyncMock) as mock_delete,
+            patch("agent_forge.tmux_utils.create_session") as mock_create,
+        ):
+            await manager.recover_sessions()
+
+        assert "ghi789" not in manager.agents
+        mock_create.assert_not_called()
+        mock_delete.assert_called_once_with(manager._db, "ghi789")
+
+    @pytest.mark.asyncio
+    async def test_recovery_with_profile(self, manager, tmp_git_repo):
+        """Recovered agent with a profile rebuilds the tmux command with system prompt."""
+        from unittest.mock import AsyncMock
+        from agent_forge.config import AgentProfile
+
+        manager.registry.config.profiles["careful"] = AgentProfile(
+            description="Plan first",
+            system_prompt="Always plan before coding.",
+        )
+
+        worktree_dir = tmp_git_repo / ".worktrees" / "pro123"
+        worktree_dir.mkdir(parents=True)
+
+        snapshot_rows = [
+            {
+                "agent_id": "pro123",
+                "project_name": "test-project",
+                "session_name": "forge__test-project__pro123",
+                "worktree_path": str(worktree_dir),
+                "branch_name": "agent/pro123/plan",
+                "status": "working",
+                "task_description": "refactor auth",
+                "created_at": "2026-01-15T10:00:00",
+                "last_activity": "2026-01-15T11:00:00",
+                "last_output": "",
+                "needs_attention": 0,
+                "parked": 0,
+                "last_response": "",
+                "last_user_message": "",
+                "profile": "careful",
+            }
+        ]
+
+        manager._db = MagicMock()
+        with (
+            patch("agent_forge.tmux_utils.list_sessions", return_value=[]),
+            patch("agent_forge.database.load_snapshots", new_callable=AsyncMock, return_value=snapshot_rows),
+            patch("agent_forge.tmux_utils.create_session", return_value=True) as mock_create,
+            patch("agent_forge.tmux_utils.enable_pipe_pane", return_value=True),
+            patch("agent_forge.database.log_event", new_callable=AsyncMock),
+        ):
+            await manager.recover_sessions()
+
+        assert "pro123" in manager.agents
+        # Verify the tmux command includes the system prompt
+        call_args = mock_create.call_args
+        tmux_command = call_args[0][2]  # third positional arg
+        assert "--append-system-prompt" in tmux_command
+        assert "Always plan before coding." in tmux_command
+
+    @pytest.mark.asyncio
+    async def test_build_tmux_command_no_profile(self, manager, tmp_path):
+        """_build_tmux_command without profile returns basic command."""
+        cmd = manager._build_tmux_command(tmp_path / "worktree")
+        assert "echo" in cmd  # claude_command is "echo" in test fixture
+        assert "--append-system-prompt" not in cmd
+
+    @pytest.mark.asyncio
+    async def test_build_tmux_command_with_profile(self, manager, tmp_path):
+        """_build_tmux_command with profile includes system prompt."""
+        from agent_forge.config import AgentProfile
+        profile = AgentProfile(system_prompt="Be careful")
+        cmd = manager._build_tmux_command(tmp_path / "worktree", profile)
+        assert "--append-system-prompt" in cmd
+        assert "Be careful" in cmd
+
+    @pytest.mark.asyncio
+    async def test_build_tmux_command_with_env(self, manager, tmp_path):
+        """_build_tmux_command includes environment variable exports."""
+        manager.defaults.claude_env = {"FOO": "bar"}
+        cmd = manager._build_tmux_command(tmp_path / "worktree")
+        assert "export FOO=bar" in cmd
