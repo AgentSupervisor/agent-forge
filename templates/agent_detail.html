@@ -23,33 +23,21 @@
             <div style="display:flex; align-items:center; gap:12px; font-size:12px; color:var(--text-muted);">
                 <span id="detail-uptime-val"></span>
                 <span style="font-family:monospace;" title="{{ agent.branch_name }}">{{ agent.branch_name }}</span>
-                <button class="btn btn-ghost btn-xs" onclick="refreshTerminal()">Refresh</button>
             </div>
         </div>
 
-        <!-- Terminal output -->
+        <!-- Terminal output (xterm.js) -->
         <div style="position:relative; flex:1; min-height:0;">
-            <div id="terminal-view" class="terminal-container" style="position:absolute; inset:0; border-radius:0;">{{
-                terminal_output }}</div>
-            <button id="autoscroll-btn"
-                onclick="window._terminalAutoScroll=true; this.style.display='none'; refreshTerminal();"
-                style="display:none; position:absolute; bottom:12px; right:20px; z-index:10; background:rgba(30,30,40,0.85); border:1px solid var(--border); color:var(--text-muted); font-size:18px; width:32px; height:32px; border-radius:50%; cursor:pointer; line-height:1;"
-                title="Auto-scroll paused — click to resume">&#8595;</button>
+            <div id="terminal-container" style="position:absolute; inset:0; border-radius:0; background:#080a0e;"></div>
         </div>
 
-        <!-- Message input bar (below terminal, like a prompt) -->
-        <div
-            style="display:flex; align-items:flex-end; gap:10px; padding:10px 16px; border-top:1px solid var(--border); background:var(--bg-surface); flex-shrink:0;">
-            <span
-                style="color:var(--text-muted); font-family:'JetBrains Mono',monospace; font-size:13px; flex-shrink:0; padding-bottom:8px;">&#10095;</span>
-            <textarea x-model="messageText" placeholder="Send a message to the agent..." class="input" rows="1"
-                style="flex:1; background:var(--bg-input); border-radius:6px; padding:8px 12px; font-size:13px; resize:none; overflow-y:hidden; max-height:150px; line-height:1.4;"
-                @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); sendMessage(); }"
-                @input="$el.style.height='auto'; $el.style.height=$el.scrollHeight+'px'"></textarea>
-            <button class="btn btn-primary btn-sm" @click="sendMessage()" :disabled="sending" style="flex-shrink:0; margin-bottom:2px;">
-                <span x-show="!sending">Send</span>
-                <span x-show="sending">...</span>
-            </button>
+        <!-- Shortcut hints (shown when agent is waiting for input) -->
+        <div id="shortcut-hints"
+            style="display:none; padding:6px 16px; border-top:1px solid var(--border); background:var(--bg-surface); flex-shrink:0; font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">
+            <span style="color:var(--text-secondary);">Type directly in the terminal</span>
+            <span style="margin-left:16px;"><kbd class="kbd">Enter</kbd> Submit</span>
+            <span style="margin-left:12px;"><kbd class="kbd">Ctrl+C</kbd> Interrupt</span>
+            <span style="margin-left:12px;"><kbd class="kbd">Esc</kbd> Reject</span>
         </div>
     </div>
 
@@ -161,105 +149,32 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/js/terminal.js?v={{ cache_bust | default('1') }}"></script>
 <script>
     const AGENT_ID = '{{ agent.id }}';
 
-    // Shared AnsiUp instance for ANSI-to-HTML conversion
-    window._ansiUp = new AnsiUp();
-    window._ansiUp.use_classes = false;
-    window._ansiUp.escape_for_html = true;
-
-    // Render initial terminal output through AnsiUp and scroll to bottom
-    (function () {
-        var el = document.getElementById('terminal-view');
-        if (el && el.textContent) {
-            el.innerHTML = window._ansiUp.ansi_to_html(el.textContent);
-            el.scrollTop = el.scrollHeight;
-        }
-    })();
-
-    // Auto-scroll state: pause when user scrolls up, resume when near bottom.
-    // _ignoreScrollUntil is set by programmatic updates so their scroll events
-    // don't accidentally disable auto-scroll.
-    window._terminalAutoScroll = true;
-    window._ignoreScrollUntil = 0;
-    (function () {
-        var el = document.getElementById('terminal-view');
-        var btn = document.getElementById('autoscroll-btn');
-        if (!el) return;
-        el.addEventListener('scroll', function () {
-            if (Date.now() < window._ignoreScrollUntil) return;
-            var atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
-            if (atBottom && !window._terminalAutoScroll) {
-                window._terminalAutoScroll = true;
-                if (btn) btn.style.display = 'none';
-            } else if (!atBottom && window._terminalAutoScroll) {
-                window._terminalAutoScroll = false;
-                if (btn) btn.style.display = 'block';
-            }
-        });
-    })();
+    // Initialize xterm.js terminal
+    const agentTerminal = new AgentTerminal('terminal-container', AGENT_ID);
 
     function agentDetail() {
         return {
-            messageText: '',
-            sending: false,
-
             init() {
                 loadEvents();
                 computeUptime();
                 setInterval(computeUptime, 10000);
                 window.currentAgentId = AGENT_ID;
 
-                // Auto-focus message input
-                this.$nextTick(() => {
-                    const input = document.querySelector('textarea[x-model="messageText"]');
-                    if (input) input.focus();
-                });
+                // Initialize terminal connection
+                agentTerminal.connect();
 
-                // Ctrl+C shortcut: send interrupt to agent terminal
+                // Ctrl+Shift+R: restart agent
                 document.addEventListener('keydown', (e) => {
-                    if (e.key === 'c' && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
-                        // Allow normal copy if text is selected
-                        if (window.getSelection().toString()) return;
-                        e.preventDefault();
-                        sendControl('interrupt');
-                    }
-                    // Ctrl+Shift+R: restart agent (Ctrl+R alone is browser refresh)
                     if (e.key === 'R' && e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
                         e.preventDefault();
                         restartAgent();
                     }
                 });
             },
-
-            async sendMessage() {
-                const text = this.messageText.trim();
-                if (!text || this.sending) return;
-                this.sending = true;
-                try {
-                    const res = await fetch('/api/agents/' + AGENT_ID + '/message', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ text }),
-                    });
-                    if (res.ok) {
-                        this.messageText = '';
-                        const ta = document.querySelector('textarea[x-model="messageText"]');
-                        if (ta) { ta.style.height = 'auto'; }
-                        showToast('Message sent');
-                        setTimeout(refreshTerminal, 2000);
-                        loadEvents();
-                    } else {
-                        const detail = await res.json().then(d => d.detail || 'Failed to send').catch(() => res.statusText);
-                        showToast(detail, true);
-                    }
-                } catch (e) {
-                    showToast('Error: ' + e.message, true);
-                } finally {
-                    this.sending = false;
-                }
-            }
         }
     }
 
@@ -279,26 +194,6 @@
         }
         const el = document.getElementById('detail-uptime-val');
         if (el) el.textContent = text;
-    }
-
-    async function refreshTerminal() {
-        try {
-            const res = await fetch('/api/agents/' + AGENT_ID + '/terminal');
-            if (res.ok) {
-                const data = await res.json();
-                if (!window._terminalAutoScroll) return;
-                const el = document.getElementById('terminal-view');
-                window._ignoreScrollUntil = Date.now() + 200;
-                if (window._ansiUp) {
-                    el.innerHTML = window._ansiUp.ansi_to_html(data.output);
-                } else {
-                    el.textContent = data.output;
-                }
-                if (window._terminalAutoScroll) {
-                    el.scrollTop = el.scrollHeight;
-                }
-            }
-        } catch (e) { /* silent */ }
     }
 
     async function loadEvents() {
@@ -330,7 +225,6 @@
             });
             if (res.ok) {
                 showToast('Sent: ' + action);
-                setTimeout(refreshTerminal, 1500);
                 loadEvents();
             } else {
                 const detail = await res.json().then(d => d.detail || 'Failed').catch(() => res.statusText);
@@ -348,7 +242,7 @@
             if (res.ok) {
                 const data = await res.json();
                 showToast('Restarted. Redirecting to new agent...');
-                setTimeout(() => window.location.href = '/agents/' + data.new_id, 1000);
+                setTimeout(() => window.location.href = '/agent/' + data.new_id, 1000);
             } else {
                 const detail = await res.json().then(d => d.detail || 'Failed to restart').catch(() => res.statusText);
                 showToast(detail, true);
