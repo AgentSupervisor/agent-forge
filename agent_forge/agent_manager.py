@@ -107,6 +107,21 @@ class AgentManager:
         settings_path.write_text(json.dumps(hooks_config, indent=2))
         logger.info("Installed Claude Code hooks in %s", settings_path)
 
+    def _copy_agent_skills(self, worktree_dir: Path) -> None:
+        """Copy .claude/agents/ skill definitions into the worktree.
+
+        Agent-forge's skill catalog is copied so spawned agents
+        have access to specialized agent definitions.
+        """
+        forge_root = Path(__file__).resolve().parent.parent
+        source = forge_root / ".claude" / "agents"
+        if not source.is_dir():
+            return
+
+        dest = worktree_dir / ".claude" / "agents"
+        shutil.copytree(str(source), str(dest), dirs_exist_ok=True)
+        logger.info("Copied agent skills to %s", dest)
+
     def _generate_claude_md(
         self,
         worktree_dir: Path,
@@ -326,6 +341,9 @@ class AgentManager:
 
         # Install Claude Code hooks for sub-agent tracking
         self._install_hooks(worktree_dir, short_id)
+
+        # Copy agent skill definitions from forge repo
+        self._copy_agent_skills(worktree_dir)
 
         # Generate CLAUDE.md with merged instruction layers
         self._generate_claude_md(worktree_dir, project_name, profile_obj)
