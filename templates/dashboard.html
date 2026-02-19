@@ -74,7 +74,7 @@
         </div>
         <div style="flex:1;"></div>
         <button class="btn btn-primary btn-sm" @click="spawnModalOpen = true">
-            + Spawn Agent <span class="kbd" style="margin-left:6px;">&#8984;K</span>
+            + Spawn Workflow <span class="kbd" style="margin-left:6px;">&#8984;K</span>
         </button>
     </div>
 
@@ -147,7 +147,7 @@
             <div class="empty-icon">&#9881;</div>
             <p>No active agents. Spawn one to get started.</p>
             <button class="btn btn-primary" style="margin-top:20px;" @click="spawnModalOpen = true">
-                + Spawn Agent
+                + Spawn Workflow
             </button>
         </div>
         {% endif %}
@@ -158,7 +158,7 @@
     <div x-show="spawnModalOpen" x-cloak class="modal-overlay"
          @keydown.escape.window="spawnModalOpen = false">
         <div class="modal-panel" @click.outside="spawnModalOpen = false">
-            <h3 style="font-size:18px;font-weight:700;color:var(--text-primary);margin-bottom:20px;">Spawn Agent</h3>
+            <h3 style="font-size:18px;font-weight:700;color:var(--text-primary);margin-bottom:20px;">Spawn Workflow</h3>
             <div style="display:flex;flex-direction:column;gap:16px;">
                 <div>
                     <label style="display:block;font-size:13px;font-weight:500;color:var(--text-secondary);margin-bottom:6px;">Project</label>
@@ -170,7 +170,7 @@
                 </div>
                 <div>
                     <label style="display:block;font-size:13px;font-weight:500;color:var(--text-secondary);margin-bottom:6px;">Task Description</label>
-                    <textarea x-model="spawnTask" rows="4" placeholder="Describe the task for the agent..."
+                    <textarea x-model="spawnTask" rows="4" placeholder="Describe the task..."
                               class="textarea"
                               @keydown.ctrl.enter="spawnAgent()"
                               @keydown.meta.enter="spawnAgent()"></textarea>
@@ -294,11 +294,11 @@ function dashboard() {
                         this.compareProfiles = [];
                         this.compareCount = 0;
                         this.compareMode = false;
-                        showToast(data.length + ' comparison agents spawned');
+                        showToast(data.length + ' comparison workflows started');
                         data.forEach(a => addAgentCard(a));
                         this.refreshStats();
                     } else {
-                        showToast(data.detail || 'Failed to spawn comparison agents', true);
+                        showToast(data.detail || 'Failed to start comparison workflows', true);
                     }
                 } else {
                     res = await fetch('/api/agents', {
@@ -314,11 +314,11 @@ function dashboard() {
                     if (res.ok) {
                         this.spawnModalOpen = false;
                         this.spawnTask = '';
-                        showToast('Agent ' + data.id + ' spawned');
+                        showToast('Workflow started · agent ' + data.id);
                         addAgentCard(data);
                         this.refreshStats();
                     } else {
-                        showToast(data.detail || 'Failed to spawn agent', true);
+                        showToast(data.detail || 'Failed to start workflow', true);
                     }
                 }
             } catch (e) {
@@ -407,7 +407,7 @@ function addAgentCard(a) {
 }
 
 async function killAgent(agentId) {
-    if (!confirm('Kill agent ' + agentId + '?\n\nThis will terminate the agent immediately. All unsaved progress will be lost and the worktree will be removed.')) return;
+    if (!confirm('Kill agent ' + agentId + '?\n\nThis will terminate the agent and remove the worktree.')) return;
     try {
         const res = await fetch('/api/agents/' + agentId, { method: 'DELETE' });
         if (res.ok) {
