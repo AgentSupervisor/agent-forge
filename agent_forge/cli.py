@@ -17,6 +17,7 @@ import yaml
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = ROOT_DIR / "config.yaml"
+EXAMPLE_CONFIG = ROOT_DIR / "config.example.yaml"
 PID_FILE = ROOT_DIR / ".forge.pid"
 
 
@@ -65,6 +66,12 @@ def cmd_init(args: argparse.Namespace) -> None:
         if overwrite != "y":
             print("Aborted.")
             return
+
+    # Load example config as base template (carries agent_instructions, etc.)
+    base: dict = {}
+    if EXAMPLE_CONFIG.exists():
+        with open(EXAMPLE_CONFIG) as f:
+            base = yaml.safe_load(f) or {}
 
     print("\n  Agent Forge — Configuration Setup\n")
 
@@ -157,31 +164,35 @@ def cmd_init(args: argparse.Namespace) -> None:
 
         print(f"    Added: {name}\n")
 
-    # Build config
-    config = {
-        "server": {
-            "host": host,
-            "port": port,
-            "secret_key": "change-me-in-production",
-        },
-        "telegram": {
-            "bot_token": telegram_token or "",
-            "allowed_users": allowed_users,
-        },
-        "defaults": {
-            "max_agents_per_project": max_agents,
-            "sandbox": True,
-            "claude_command": claude_cmd,
-            "claude_env": claude_env,
-            "poll_interval_seconds": poll_interval,
-        },
-        "projects": projects,
+    # Build config — start from example template, overlay user settings
+    config = base
+
+    config["server"] = {
+        "host": host,
+        "port": port,
+        "secret_key": "change-me-in-production",
     }
+    config["telegram"] = {
+        "bot_token": telegram_token or "",
+        "allowed_users": allowed_users,
+    }
+
+    # Merge defaults, preserving agent_instructions and summary from template
+    base_defaults = config.get("defaults", {})
+    base_defaults.update({
+        "max_agents_per_project": max_agents,
+        "sandbox": True,
+        "claude_command": claude_cmd,
+        "claude_env": claude_env,
+        "poll_interval_seconds": poll_interval,
+    })
+    config["defaults"] = base_defaults
+
+    config["projects"] = projects
 
     # Write
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with open(config_path, "w") as f:
-        f.write("# Agent Forge Configuration\n")
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
     print(f"\n  Config written to {config_path}")
