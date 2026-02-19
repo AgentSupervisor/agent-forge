@@ -1,0 +1,354 @@
+"""TerminalBridge — real-time tmux control mode streaming to WebSocket clients."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fastapi import WebSocket
+
+__all__ = ["TerminalBridge", "TerminalBridgeManager"]
+
+logger = logging.getLogger(__name__)
+
+
+class TerminalBridge:
+    """Manages a single ``tmux -CC attach-session`` subprocess per tmux session.
+
+    Reads ``%output`` lines from the control mode stdout and forwards the
+    decoded bytes to all connected WebSocket clients.  Keyboard input from
+    clients is written back to the control mode stdin as ``send-keys``
+    commands.
+    """
+
+    def __init__(self, session_name: str) -> None:
+        self.session_name: str = session_name
+        self._clients: list[WebSocket] = []
+        self._process: asyncio.subprocess.Process | None = None
+        self._reader_task: asyncio.Task | None = None
+        self._running: bool = False
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    async def start(self) -> bool:
+        """Start the tmux control mode subprocess.
+
+        Returns:
+            True on success, False if the session does not exist or the
+            process fails to start.
+        """
+        try:
+            self._process = await asyncio.create_subprocess_exec(
+                "tmux",
+                "-CC",
+                "attach-session",
+                "-t",
+                self.session_name,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to start tmux control mode for session %s", self.session_name
+            )
+            return False
+
+        self._running = True
+        self._reader_task = asyncio.create_task(self._read_output())
+        logger.info("TerminalBridge started for session %s", self.session_name)
+        return True
+
+    async def stop(self) -> None:
+        """Gracefully detach from tmux and clean up."""
+        self._running = False
+
+        if self._process and self._process.stdin:
+            try:
+                self._process.stdin.write(b"detach\n")
+                await self._process.stdin.drain()
+            except Exception:
+                pass
+
+        if self._reader_task and not self._reader_task.done():
+            self._reader_task.cancel()
+            try:
+                await self._reader_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._process:
+            try:
+                self._process.terminate()
+            except Exception:
+                pass
+            self._process = None
+
+        for ws in list(self._clients):
+            try:
+                await ws.close()
+            except Exception:
+                pass
+        self._clients.clear()
+
+        logger.info("TerminalBridge stopped for session %s", self.session_name)
+
+    # ------------------------------------------------------------------
+    # Output reader
+    # ------------------------------------------------------------------
+
+    async def _read_output(self) -> None:
+        """Read stdout from the control mode process and forward %output lines."""
+        if not self._process or not self._process.stdout:
+            return
+
+        try:
+            while self._running:
+                line_bytes = await self._process.stdout.readline()
+                if not line_bytes:
+                    # EOF — tmux session likely died
+                    logger.warning(
+                        "tmux control mode EOF for session %s", self.session_name
+                    )
+                    self._running = False
+                    break
+
+                line = line_bytes.decode("utf-8", errors="replace").rstrip("\n")
+
+                if not line.startswith("%output "):
+                    # Ignore %begin, %end, %error, %session-changed, etc.
+                    continue
+
+                # Format: %output %PANE_ID ESCAPED_DATA
+                # Strip the leading "%output " prefix then split off the pane id
+                rest = line[len("%output "):]
+                # pane id is the next token (e.g. "%0"), data follows
+                space_idx = rest.find(" ")
+                if space_idx == -1:
+                    # No data after pane id
+                    continue
+
+                escaped_data = rest[space_idx + 1:]
+                decoded = self._decode_output(escaped_data)
+
+                for ws in list(self._clients):
+                    try:
+                        await ws.send_bytes(decoded)
+                    except Exception:
+                        logger.debug(
+                            "Failed to send bytes to WebSocket client; removing", exc_info=True
+                        )
+                        self._clients.discard(ws) if hasattr(self._clients, "discard") else None
+
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "Unexpected error in _read_output for session %s", self.session_name
+            )
+            self._running = False
+
+    # ------------------------------------------------------------------
+    # Client management
+    # ------------------------------------------------------------------
+
+    async def add_client(self, ws: WebSocket) -> None:
+        """Add a WebSocket client and send the current terminal snapshot.
+
+        The snapshot is obtained via a regular ``tmux capture-pane`` subprocess
+        call (not through the control mode stdin) so we do not need to parse the
+        ``%begin``/``%end`` response.
+        """
+        self._clients.append(ws)
+
+        # Send initial snapshot
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "tmux",
+                "capture-pane",
+                "-e",
+                "-p",
+                "-t",
+                self.session_name,
+                "-S",
+                "-5000",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            if stdout:
+                await ws.send_bytes(stdout)
+        except Exception:
+            logger.exception(
+                "Failed to capture initial pane snapshot for session %s",
+                self.session_name,
+            )
+
+    def remove_client(self, ws: WebSocket) -> bool:
+        """Remove a WebSocket client.
+
+        Returns:
+            True if no clients remain after removal (caller may clean up).
+        """
+        try:
+            self._clients.remove(ws)
+        except ValueError:
+            pass
+        return len(self._clients) == 0
+
+    # ------------------------------------------------------------------
+    # Input handling
+    # ------------------------------------------------------------------
+
+    async def handle_input(self, data: bytes) -> None:
+        """Forward keyboard input from the client to the tmux session.
+
+        Printable text is sent via ``send-keys -l`` (literal mode).  Control
+        characters are mapped to named tmux key names.
+        """
+        if not self._running or self._process is None:
+            return
+
+        try:
+            text = data.decode("utf-8", errors="replace")
+        except Exception:
+            return
+
+        # Map well-known control characters to named tmux keys
+        _CONTROL_KEYS: dict[str, str] = {
+            "\r": "Enter",
+            "\n": "Enter",
+            "\x03": "C-c",
+            "\x04": "C-d",
+            "\x1b": "Escape",
+            "\x7f": "BSpace",
+        }
+
+        if text in _CONTROL_KEYS:
+            await self._send_command(
+                f"send-keys -t {self.session_name} {_CONTROL_KEYS[text]}"
+            )
+        elif len(text) == 1 and ord(text) < 32:
+            # Other single control characters: send as C-<letter>
+            ctrl_letter = chr(ord(text) + 64)
+            await self._send_command(
+                f"send-keys -t {self.session_name} C-{ctrl_letter}"
+            )
+        else:
+            # Printable (possibly multi-character) text — use literal mode
+            # Escape single quotes in the payload so the shell does not misparse
+            escaped = text.replace("'", "'\\''")
+            await self._send_command(
+                f"send-keys -t {self.session_name} -l -- '{escaped}'"
+            )
+
+    async def handle_resize(self, cols: int, rows: int) -> None:
+        """Resize the tmux pane to the given dimensions."""
+        if not self._running or self._process is None:
+            return
+        await self._send_command(
+            f"resize-pane -t {self.session_name} -x {cols} -y {rows}"
+        )
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    async def _send_command(self, cmd: str) -> None:
+        """Write a control mode command to the tmux subprocess stdin."""
+        if not self._process or not self._process.stdin:
+            return
+        try:
+            self._process.stdin.write((cmd + "\n").encode("utf-8"))
+            await self._process.stdin.drain()
+        except Exception:
+            logger.debug("Failed to write command to tmux stdin: %s", cmd, exc_info=True)
+
+    @staticmethod
+    def _decode_output(data: str) -> bytes:
+        """Decode tmux control mode ``%output`` escaped data to raw bytes.
+
+        tmux escapes non-printable bytes as ``\\NNN`` (octal) and backslash
+        as ``\\\\``.
+        """
+        result = bytearray()
+        i = 0
+        while i < len(data):
+            if data[i] == "\\" and i + 1 < len(data):
+                if data[i + 1] == "\\":
+                    result.append(ord("\\"))
+                    i += 2
+                elif (
+                    i + 3 < len(data)
+                    and all(c in "01234567" for c in data[i + 1 : i + 4])
+                ):
+                    result.append(int(data[i + 1 : i + 4], 8))
+                    i += 4
+                else:
+                    result.append(ord(data[i]))
+                    i += 1
+            else:
+                result.append(ord(data[i]))
+                i += 1
+        return bytes(result)
+
+    @property
+    def client_count(self) -> int:
+        """Return the number of connected WebSocket clients."""
+        return len(self._clients)
+
+
+class TerminalBridgeManager:
+    """Manages ``TerminalBridge`` instances across all agents.
+
+    Keyed by tmux session name.  Thread-safe via an ``asyncio.Lock``.
+    """
+
+    def __init__(self) -> None:
+        self._bridges: dict[str, TerminalBridge] = {}
+        self._lock: asyncio.Lock = asyncio.Lock()
+
+    async def get_or_create(self, session_name: str) -> TerminalBridge:
+        """Return an existing running bridge or create and start a new one.
+
+        Args:
+            session_name: The tmux session name to attach to.
+
+        Returns:
+            A started ``TerminalBridge`` instance.
+
+        Raises:
+            RuntimeError: If the bridge cannot be started (e.g. session missing).
+        """
+        async with self._lock:
+            bridge = self._bridges.get(session_name)
+            if bridge is not None and bridge._running:
+                return bridge
+
+            bridge = TerminalBridge(session_name)
+            started = await bridge.start()
+            if not started:
+                raise RuntimeError(
+                    f"Could not attach to tmux session '{session_name}'"
+                )
+            self._bridges[session_name] = bridge
+            return bridge
+
+    async def remove(self, session_name: str) -> None:
+        """Stop and remove the bridge for the given session."""
+        async with self._lock:
+            bridge = self._bridges.pop(session_name, None)
+            if bridge is not None:
+                await bridge.stop()
+
+    async def shutdown(self) -> None:
+        """Stop all managed bridges.  Called on application shutdown."""
+        async with self._lock:
+            for bridge in list(self._bridges.values()):
+                await bridge.stop()
+            self._bridges.clear()
+        logger.info("TerminalBridgeManager shut down all bridges")

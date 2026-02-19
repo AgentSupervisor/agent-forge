@@ -135,7 +135,7 @@ class TestStatusMonitorPoll:
 
     @pytest.mark.asyncio
     async def test_poll_broadcasts_updates(self, monitor, agent):
-        """Poll should broadcast both agent update and terminal output."""
+        """Poll should broadcast agent status updates (terminal output uses dedicated WS)."""
         output = "working on stuff..."
         with (
             patch("agent_forge.tmux_utils.capture_pane", return_value=output),
@@ -144,9 +144,9 @@ class TestStatusMonitorPoll:
             await monitor._poll()
 
         monitor.ws_manager.broadcast_agent_update.assert_called_once_with(agent)
-        monitor.ws_manager.broadcast_terminal_output.assert_called_once_with(
-            agent.id, output,
-        )
+        # broadcast_terminal_output is no longer called from the poll loop;
+        # terminal output streams via the dedicated /ws/terminal/{agent_id} endpoint.
+        monitor.ws_manager.broadcast_terminal_output.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_poll_skips_stopped_agents(self, monitor, agent):

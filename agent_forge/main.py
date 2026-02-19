@@ -19,6 +19,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
+import json
+
 from .agent_manager import AgentManager
 from .config import (
     ChannelBinding,
@@ -31,6 +33,7 @@ from .config import (
 from .database import delete_snapshot, get_events, init_db, log_event
 from .log_manager import LogManager
 from .registry import ProjectRegistry
+from .terminal_bridge import TerminalBridgeManager
 from .websocket_manager import WebSocketManager
 
 logger = logging.getLogger(__name__)
@@ -138,10 +141,13 @@ async def lifespan(app: FastAPI):
     app.state.connector_manager = connector_manager
     app.state.log_manager = log_manager
     app.state.started_at = time.time()
+    terminal_bridges = TerminalBridgeManager()
+    app.state.terminal_bridges = terminal_bridges
 
     yield
 
     # Shutdown — stop monitors and connectors, close db. Do NOT kill agents.
+    await terminal_bridges.shutdown()
     if status_monitor:
         await status_monitor.stop()
     if connector_manager:
@@ -1334,6 +1340,50 @@ async def websocket_logs(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         log_mgr.disconnect(websocket)
+
+
+@app.websocket("/ws/terminal/{agent_id}")
+async def websocket_terminal(websocket: WebSocket, agent_id: str):
+    """Dedicated terminal WebSocket for real-time xterm.js streaming."""
+    mgr: AgentManager = websocket.app.state.agent_manager
+    agent = mgr.get_agent(agent_id)
+    if not agent:
+        await websocket.close(code=4004, reason="Agent not found")
+        return
+
+    bridge_mgr: TerminalBridgeManager = websocket.app.state.terminal_bridges
+    try:
+        bridge = await bridge_mgr.get_or_create(agent.session_name)
+    except Exception as exc:
+        logger.error("Failed to create terminal bridge for %s: %s", agent_id, exc)
+        await websocket.close(code=4500, reason="Bridge creation failed")
+        return
+
+    await websocket.accept()
+    await bridge.add_client(websocket)
+
+    try:
+        while True:
+            message = await websocket.receive()
+            if "bytes" in message and message["bytes"]:
+                # Binary frame: keyboard input
+                await bridge.handle_input(message["bytes"])
+            elif "text" in message and message["text"]:
+                # Text frame: control message (resize, etc.)
+                try:
+                    data = json.loads(message["text"])
+                    if data.get("type") == "resize":
+                        cols = int(data.get("cols", 80))
+                        rows = int(data.get("rows", 24))
+                        await bridge.handle_resize(cols, rows)
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    pass
+    except WebSocketDisconnect:
+        pass
+    finally:
+        no_clients = bridge.remove_client(websocket)
+        if no_clients:
+            await bridge_mgr.remove(agent.session_name)
 
 
 # ---------------------------------------------------------------------------
