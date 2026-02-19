@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import pty
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -29,6 +31,7 @@ class TerminalBridge:
         self._process: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task | None = None
         self._running: bool = False
+        self._master_fd: int | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -42,20 +45,41 @@ class TerminalBridge:
             process fails to start.
         """
         try:
+            master_fd, slave_fd = pty.openpty()
             self._process = await asyncio.create_subprocess_exec(
                 "tmux",
                 "-CC",
                 "attach-session",
                 "-t",
                 self.session_name,
-                stdin=asyncio.subprocess.PIPE,
+                stdin=slave_fd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
+            os.close(slave_fd)  # Close slave end in parent
         except Exception:
             logger.exception(
                 "Failed to start tmux control mode for session %s", self.session_name
             )
+            try:
+                os.close(master_fd)
+            except Exception:
+                pass
+            return False
+
+        self._master_fd = master_fd
+
+        # Verify the process didn't exit immediately (e.g. session not found)
+        await asyncio.sleep(0.1)
+        if self._process.returncode is not None:
+            logger.warning(
+                "tmux control mode exited immediately for session %s (rc=%s)",
+                self.session_name,
+                self._process.returncode,
+            )
+            os.close(self._master_fd)
+            self._master_fd = None
+            self._process = None
             return False
 
         self._running = True
@@ -67,10 +91,9 @@ class TerminalBridge:
         """Gracefully detach from tmux and clean up."""
         self._running = False
 
-        if self._process and self._process.stdin:
+        if self._master_fd is not None:
             try:
-                self._process.stdin.write(b"detach\n")
-                await self._process.stdin.drain()
+                os.write(self._master_fd, b"detach\n")
             except Exception:
                 pass
 
@@ -87,6 +110,13 @@ class TerminalBridge:
             except Exception:
                 pass
             self._process = None
+
+        if self._master_fd is not None:
+            try:
+                os.close(self._master_fd)
+            except Exception:
+                pass
+            self._master_fd = None
 
         for ws in list(self._clients):
             try:
@@ -177,8 +207,6 @@ class TerminalBridge:
                 "-p",
                 "-t",
                 self.session_name,
-                "-S",
-                "-5000",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -186,6 +214,9 @@ class TerminalBridge:
             if stdout:
                 # capture-pane uses \n line endings; xterm.js needs \r\n
                 stdout = stdout.replace(b"\n", b"\r\n")
+                # Strip trailing blank lines (empty rows from pane padding)
+                while stdout.endswith(b"\r\n\r\n"):
+                    stdout = stdout[:-2]
                 await ws.send_bytes(stdout)
         except Exception:
             logger.exception(
@@ -239,26 +270,40 @@ class TerminalBridge:
             )
 
     async def handle_resize(self, cols: int, rows: int) -> None:
-        """Resize the tmux pane to the given dimensions."""
-        if not self._running or self._process is None:
+        """Resize the tmux window to match the client terminal dimensions."""
+        if not self._running:
             return
-        await self._send_command(
-            f"resize-pane -t {self.session_name} -x {cols} -y {rows}"
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "tmux",
+                "resize-window",
+                "-t",
+                self.session_name,
+                "-x",
+                str(cols),
+                "-y",
+                str(rows),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()
+        except Exception:
+            logger.debug(
+                "Failed to resize window for session %s", self.session_name, exc_info=True
+            )
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
     async def _send_command(self, cmd: str) -> None:
-        """Write a control mode command to the tmux subprocess stdin."""
-        if not self._process or not self._process.stdin:
+        """Write a control mode command to the tmux subprocess via PTY."""
+        if self._master_fd is None:
             return
         try:
-            self._process.stdin.write((cmd + "\n").encode("utf-8"))
-            await self._process.stdin.drain()
+            os.write(self._master_fd, (cmd + "\n").encode("utf-8"))
         except Exception:
-            logger.debug("Failed to write command to tmux stdin: %s", cmd, exc_info=True)
+            logger.debug("Failed to write command to tmux PTY: %s", cmd, exc_info=True)
 
     @staticmethod
     def _decode_output(data: str) -> bytes:
