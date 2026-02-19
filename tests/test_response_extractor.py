@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from agent_forge.response_extractor import (
+    ExtractionResult,
     extract_response,
     extract_response_regex,
     preprocess_output,
@@ -97,43 +98,47 @@ class TestExtractResponseRegex:
         lines = [f"meaningful line {i}" for i in range(100)]
         raw = "\n".join(lines)
         result = extract_response_regex(raw)
-        result_lines = result.splitlines()
+        assert isinstance(result, ExtractionResult)
+        result_lines = result.text.splitlines()
         assert len(result_lines) <= 50
         assert "meaningful line 99" in result_lines[-1]
 
     def test_truncates_at_200_chars(self):
         raw = "x" * 300
         result = extract_response_regex(raw)
-        for line in result.splitlines():
+        for line in result.text.splitlines():
             assert len(line) <= 200
 
     def test_filters_noise(self):
         raw = "Real output\n> \n⠋ spin\nMore output"
         result = extract_response_regex(raw)
-        assert "Real output" in result
-        assert "More output" in result
-        assert "⠋" not in result
+        assert "Real output" in result.text
+        assert "More output" in result.text
+        assert "⠋" not in result.text
 
     def test_empty_input(self):
-        assert extract_response_regex("") == ""
+        result = extract_response_regex("")
+        assert isinstance(result, ExtractionResult)
+        assert result.text == ""
 
     def test_all_noise_returns_empty(self):
         raw = "> \n❯ \n$ "
-        assert extract_response_regex(raw) == ""
+        result = extract_response_regex(raw)
+        assert result.text == ""
 
     def test_preserves_block_marker_content(self):
         """⏺ prefixed lines should have their text preserved in regex extraction."""
         raw = "⏺ Why do programmers prefer dark mode?\n\n  Because light attracts bugs."
         result = extract_response_regex(raw)
-        assert "Why do programmers prefer dark mode?" in result
-        assert "Because light attracts bugs." in result
+        assert "Why do programmers prefer dark mode?" in result.text
+        assert "Because light attracts bugs." in result.text
 
     def test_filters_ai_thinking_artifact(self):
         """ai(thinking) should be filtered from regex extraction output."""
         raw = "The answer is 42.\nai(thinking)\nThat's the result."
         result = extract_response_regex(raw)
-        assert "The answer is 42." in result
-        assert "ai(thinking)" not in result
+        assert "The answer is 42." in result.text
+        assert "ai(thinking)" not in result.text
 
 
 class TestExtractResponse:
@@ -158,7 +163,8 @@ class TestExtractResponse:
                 api_key="test-key",
             )
 
-        assert result == "I fixed the login bug by updating auth.py."
+        assert isinstance(result, ExtractionResult)
+        assert result.text == "I fixed the login bug by updating auth.py."
         mock_client.post.assert_called_once()
         call_kwargs = mock_client.post.call_args
         assert call_kwargs[1]["headers"]["x-api-key"] == "test-key"

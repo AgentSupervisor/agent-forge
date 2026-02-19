@@ -270,6 +270,9 @@ class ConnectorManager:
                 return
             agent, newly_spawned = result
 
+        # Record the user message for context
+        agent.last_user_message = msg.text
+
         # Check for inline commands (e.g. @project:agent_id /status)
         inline_result = await self._handle_inline_command(msg, agent)
         if inline_result:
@@ -699,7 +702,9 @@ class ConnectorManager:
         except Exception:
             logger.exception("Failed to send reply via connector '%s'", original.connector_id)
 
-    async def send_to_project_channels(self, project_name: str, text: str) -> None:
+    async def send_to_project_channels(
+        self, project_name: str, text: str, media_paths: list[str] | None = None
+    ) -> None:
         """Send a message to all outbound channels bound to a project."""
         sent: set[tuple[str, str]] = set()
         for proj_name, project_cfg in self.config.projects.items():
@@ -713,6 +718,8 @@ class ConnectorManager:
                     logger.warning("Connector %s not found for outbound to %s", binding.connector_id, project_name)
                     continue
                 out = OutboundMessage(channel_id=binding.channel_id, text=text)
+                if media_paths:
+                    out.media_paths = media_paths
                 try:
                     await connector.send_message(out)
                     sent.add((binding.connector_id, binding.channel_id))
@@ -731,6 +738,8 @@ class ConnectorManager:
             if not connector:
                 continue
             out = OutboundMessage(channel_id=channel_id, text=text)
+            if media_paths:
+                out.media_paths = media_paths
             try:
                 await connector.send_message(out)
             except Exception:
@@ -745,6 +754,7 @@ class ConnectorManager:
         project_name: str,
         text: str,
         extra: dict[str, Any] | None = None,
+        media_paths: list[str] | None = None,
     ) -> None:
         """Send a message with extra metadata (e.g. action buttons) to all outbound channels."""
         sent: set[tuple[str, str]] = set()
@@ -762,6 +772,8 @@ class ConnectorManager:
                     text=text,
                     extra=extra or {},
                 )
+                if media_paths:
+                    out.media_paths = media_paths
                 try:
                     await connector.send_message(out)
                     sent.add((binding.connector_id, binding.channel_id))
@@ -784,6 +796,8 @@ class ConnectorManager:
                 text=text,
                 extra=extra or {},
             )
+            if media_paths:
+                out.media_paths = media_paths
             try:
                 await connector.send_message(out)
             except Exception:
