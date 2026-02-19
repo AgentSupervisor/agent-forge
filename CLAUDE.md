@@ -37,6 +37,6 @@ When you have finished a task (all changes made, tests passing if applicable):
 1. **Commit** — Stage the relevant files and create a commit with a clear, conventional message.
 2. **Push** — Push the branch to the remote.
 3. **Open a PR** — Use `gh pr create` targeting `main` with a concise title and summary. **Do NOT include author or co-author attribution** (no `Co-authored-by` trailers, no mentions of who wrote the code).
-4. **Fail on PR** — When PR creation fails check which gh account is necessary.
+4. **Fail on PR** — When PR creation fails use `gh auth token --user` to switch tokens.
 
 Do this automatically at the end of every task without waiting for explicit instructions.
