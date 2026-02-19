@@ -289,8 +289,8 @@ class TestCLAUDEmdGeneration:
         pr = content.index("Profile:")
         assert gi < pi < pr
 
-    def test_preserves_existing_claude_md(self, manager, tmp_path):
-        """Existing CLAUDE.md content is preserved at the end."""
+    def test_overwrites_existing_claude_md(self, manager, tmp_path):
+        """Existing CLAUDE.md content is overwritten when config layers have content."""
         worktree = tmp_path / "wt"
         worktree.mkdir()
         existing = worktree / "CLAUDE.md"
@@ -300,10 +300,9 @@ class TestCLAUDEmdGeneration:
 
         content = (worktree / "CLAUDE.md").read_text()
         assert "Global: Always parallelize work." in content
-        assert "# Existing Project Docs" in content
-        assert "Do not delete this." in content
-        # Generated content should come before existing
-        assert content.index("Global:") < content.index("# Existing Project Docs")
+        # Existing content must NOT appear — generated config is the authoritative source
+        assert "# Existing Project Docs" not in content
+        assert "Do not delete this." not in content
 
     def test_skips_when_empty(self, tmp_path, registry):
         """No CLAUDE.md created when all instruction layers are empty."""
