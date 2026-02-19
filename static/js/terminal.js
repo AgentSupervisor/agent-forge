@@ -119,6 +119,11 @@ class AgentTerminal {
             console.log('[terminal] WebSocket connected');
             this._reconnectDelay = 1000;
 
+            // Clear terminal buffer before new snapshot arrives
+            if (this.terminal) {
+                this.terminal.reset();
+            }
+
             // Send initial resize so server knows our dimensions
             if (this.terminal) {
                 const { cols, rows } = this.terminal;

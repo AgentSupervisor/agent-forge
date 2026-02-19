@@ -1375,7 +1375,7 @@ async def websocket_terminal(websocket: WebSocket, agent_id: str):
                     rows = int(data.get("rows", 24))
                     await bridge.handle_resize(cols, rows)
                     # Give tmux a moment to resize and rerender
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.15)
             except (json.JSONDecodeError, ValueError, TypeError):
                 pass
     except asyncio.TimeoutError:
