@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -1360,6 +1361,26 @@ async def websocket_terminal(websocket: WebSocket, agent_id: str):
         return
 
     await websocket.accept()
+
+    # Wait for the initial resize message from the client before sending
+    # the snapshot.  The browser sends a resize immediately after connecting
+    # so we can use a short timeout.
+    try:
+        first_msg = await asyncio.wait_for(websocket.receive(), timeout=2.0)
+        if "text" in first_msg and first_msg["text"]:
+            try:
+                data = json.loads(first_msg["text"])
+                if data.get("type") == "resize":
+                    cols = int(data.get("cols", 80))
+                    rows = int(data.get("rows", 24))
+                    await bridge.handle_resize(cols, rows)
+                    # Give tmux a moment to resize the pane
+                    await asyncio.sleep(0.05)
+            except (json.JSONDecodeError, ValueError, TypeError):
+                pass
+    except asyncio.TimeoutError:
+        pass
+
     await bridge.add_client(websocket)
 
     try:

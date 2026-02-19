@@ -184,6 +184,8 @@ class TerminalBridge:
             )
             stdout, _ = await proc.communicate()
             if stdout:
+                # capture-pane uses \n line endings; xterm.js needs \r\n
+                stdout = stdout.replace(b"\n", b"\r\n")
                 await ws.send_bytes(stdout)
         except Exception:
             logger.exception(
