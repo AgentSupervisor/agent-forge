@@ -342,6 +342,96 @@ class TestCLAUDEmdGeneration:
         assert "This is the architecture doc." in content
 
 
+class TestAgentSkillsCopy:
+    """Tests for copying .claude/agents/ skill definitions to worktrees."""
+
+    @pytest.fixture
+    def manager(self, registry):
+        defaults = DefaultsConfig(
+            max_agents_per_project=3,
+            claude_command="echo",
+            poll_interval_seconds=1.0,
+        )
+        return AgentManager(registry=registry, defaults=defaults)
+
+    def test_copies_agent_skills(self, manager, tmp_path):
+        """Agent skill files are copied from forge repo to worktree."""
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        # Create a fake source directory to copy from
+        fake_forge_root = tmp_path / "forge"
+        fake_agents = fake_forge_root / ".claude" / "agents" / "development"
+        fake_agents.mkdir(parents=True)
+        (fake_agents / "python-pro.md").write_text("# Python Pro")
+        (fake_forge_root / ".claude" / "agents" / "CATALOG.md").write_text("# Catalog")
+
+        with patch("agent_forge.agent_manager.__file__", str(fake_forge_root / "agent_forge" / "agent_manager.py")):
+            manager._copy_agent_skills(worktree)
+
+        dest = worktree / ".claude" / "agents"
+        assert dest.is_dir()
+        assert (dest / "development" / "python-pro.md").exists()
+        assert (dest / "development" / "python-pro.md").read_text() == "# Python Pro"
+        assert (dest / "CATALOG.md").exists()
+
+    def test_skips_when_no_source(self, manager, tmp_path):
+        """Gracefully handles missing .claude/agents/ source directory."""
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        fake_forge_root = tmp_path / "no-agents-here"
+        fake_forge_root.mkdir()
+
+        with patch("agent_forge.agent_manager.__file__", str(fake_forge_root / "agent_forge" / "agent_manager.py")):
+            manager._copy_agent_skills(worktree)
+
+        # No agents dir should be created
+        assert not (worktree / ".claude" / "agents").exists()
+
+    def test_merges_with_existing_claude_dir(self, manager, tmp_path):
+        """Copying skills doesn't clobber existing .claude/settings.local.json."""
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        # Pre-existing settings file (from _install_hooks)
+        claude_dir = worktree / ".claude"
+        claude_dir.mkdir()
+        settings = claude_dir / "settings.local.json"
+        settings.write_text('{"hooks": {}}')
+
+        # Create fake source
+        fake_forge_root = tmp_path / "forge"
+        fake_agents = fake_forge_root / ".claude" / "agents"
+        fake_agents.mkdir(parents=True)
+        (fake_agents / "test-agent.md").write_text("# Test")
+
+        with patch("agent_forge.agent_manager.__file__", str(fake_forge_root / "agent_forge" / "agent_manager.py")):
+            manager._copy_agent_skills(worktree)
+
+        # Settings file should still exist
+        assert settings.exists()
+        assert settings.read_text() == '{"hooks": {}}'
+        # Agent skills should also be there
+        assert (worktree / ".claude" / "agents" / "test-agent.md").exists()
+
+    @pytest.mark.asyncio
+    async def test_spawn_includes_agent_skills(self, manager):
+        """Integration: spawn_agent copies agent skills into the worktree."""
+        with (
+            patch("subprocess.run") as mock_run,
+            patch("agent_forge.tmux_utils.create_session", return_value=True),
+            patch.object(manager, "_copy_agent_skills") as mock_copy,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            agent = await manager.spawn_agent("test-project", task="test")
+
+        # Verify _copy_agent_skills was called with the worktree dir
+        mock_copy.assert_called_once()
+        call_args = mock_copy.call_args[0]
+        assert str(call_args[0]).endswith(agent.id)
+
+
 class TestStartSequence:
     """Tests for profile-based start sequences."""
 
