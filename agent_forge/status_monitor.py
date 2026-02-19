@@ -6,7 +6,6 @@ import asyncio
 import logging
 import re
 import time
-from pathlib import Path
 from typing import Any
 
 import aiosqlite
@@ -132,7 +131,7 @@ class StatusMonitor:
                         "status_change", {"status": AgentStatus.STOPPED.value},
                     )
                     if old_status == AgentStatus.WORKING:
-                        await self._relay_response(agent)
+                        await self._relay_response(agent, output)
                     msg = f"Agent `{agent.id}` ({agent.project_name}) stopped"
                     summary = await self._get_activity_summary(
                         agent.last_output or "",
@@ -164,7 +163,7 @@ class StatusMonitor:
                         )
                     elif new_status != AgentStatus.WORKING:
                         if new_status == AgentStatus.IDLE and old_status == AgentStatus.WORKING:
-                            await self._relay_response(agent)
+                            await self._relay_response(agent, output)
                         else:
                             msg = f"Agent `{agent.id}` ({agent.project_name}): {old_status.value} -> {new_status.value}"
                             summary = await self._get_activity_summary(output)
@@ -258,36 +257,16 @@ class StatusMonitor:
                     return result
         return self.extract_activity_summary(output)
 
-    async def _relay_response(self, agent: Any) -> None:
-        """Read new output from pipe-pane log and relay extracted response to IM."""
-        if not agent.output_log_path:
-            return
+    async def _relay_response(self, agent: Any, output: str = "") -> None:
+        """Extract agent response from capture_pane output and relay to IM.
 
-        log_path = Path(agent.output_log_path)
-        if not log_path.exists():
+        Uses the rendered terminal buffer (capture_pane) instead of the raw
+        pipe-pane log, because capture_pane preserves proper line breaks and
+        spacing whereas pipe-pane captures raw PTY bytes with cursor
+        positioning codes that collapse into garbage when ANSI-stripped.
+        """
+        if not output or not output.strip():
             return
-
-        try:
-            file_size = log_path.stat().st_size
-        except OSError:
-            return
-
-        if file_size <= agent.last_relay_offset:
-            return
-
-        # Read new content from the log
-        try:
-            with open(log_path, "r", errors="replace") as f:
-                f.seek(agent.last_relay_offset)
-                new_content = f.read()
-        except OSError:
-            return
-
-        if not new_content.strip():
-            return
-
-        # Update offset
-        agent.last_relay_offset = file_size
 
         # Try LLM extraction first, then regex fallback
         result: ExtractionResult | None = None
@@ -296,7 +275,7 @@ class StatusMonitor:
             api_key = self.config.get_summary_api_key()
             if relay_cfg.enabled and api_key:
                 result = await extract_response(
-                    new_content,
+                    output,
                     api_key=api_key,
                     model=relay_cfg.model,
                     max_tokens=relay_cfg.max_tokens,
@@ -305,9 +284,14 @@ class StatusMonitor:
                 )
 
         if not result:
-            result = extract_response_regex(new_content)
+            result = extract_response_regex(output)
 
         if not result or not result.text:
+            return
+
+        # Skip if the extracted response is identical to the last one
+        # (avoids re-relaying the same message on repeated WORKING→IDLE cycles)
+        if result.text == agent.last_response:
             return
 
         agent.last_response = result.text
