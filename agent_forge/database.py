@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS agent_snapshots (
     needs_attention INTEGER NOT NULL DEFAULT 0,
     parked INTEGER NOT NULL DEFAULT 0,
     last_response TEXT,
-    last_user_message TEXT
+    last_user_message TEXT,
+    profile TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_agent ON events(agent_id);
@@ -66,6 +67,7 @@ async def _migrate_add_columns(db: aiosqlite.Connection) -> None:
         ("parked", "INTEGER NOT NULL DEFAULT 0"),
         ("last_response", "TEXT"),
         ("last_user_message", "TEXT"),
+        ("profile", "TEXT"),
     ]
     for col_name, col_def in migrations:
         if col_name not in existing:
@@ -137,8 +139,8 @@ async def save_snapshot(db: aiosqlite.Connection, agent: Agent) -> None:
         """INSERT OR REPLACE INTO agent_snapshots
            (agent_id, project_name, session_name, worktree_path, branch_name,
             status, task_description, created_at, last_activity, last_output,
-            needs_attention, parked, last_response, last_user_message)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            needs_attention, parked, last_response, last_user_message, profile)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             agent.id,
             agent.project_name,
@@ -154,6 +156,7 @@ async def save_snapshot(db: aiosqlite.Connection, agent: Agent) -> None:
             int(agent.parked),
             agent.last_response[-5000:] if agent.last_response else "",
             agent.last_user_message[-2000:] if agent.last_user_message else "",
+            agent.profile,
         ),
     )
     await db.commit()

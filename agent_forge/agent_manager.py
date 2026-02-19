@@ -267,6 +267,23 @@ class AgentManager:
         if steps:
             await self._execute_start_sequence(agent_id, steps, task)
 
+    def _build_tmux_command(
+        self,
+        worktree_dir: Path,
+        profile_obj: AgentProfile | None = None,
+    ) -> str:
+        """Build the tmux shell command that starts Claude Code in a worktree."""
+        env_exports = " ".join(
+            f"export {k}={v} &&" for k, v in self.defaults.claude_env.items()
+        )
+        claude_cmd = self.defaults.claude_command
+        if profile_obj and profile_obj.system_prompt.strip():
+            escaped_prompt = profile_obj.system_prompt.strip().replace("'", "'\\''")
+            claude_cmd = f"{claude_cmd} --append-system-prompt '{escaped_prompt}'"
+        if env_exports:
+            return f"cd {worktree_dir} && {env_exports} {claude_cmd}"
+        return f"cd {worktree_dir} && {claude_cmd}"
+
     async def spawn_agent(
         self,
         project_name: str,
@@ -342,18 +359,7 @@ class AgentManager:
         self._generate_claude_md(worktree_dir, project_name, profile_obj)
 
         # Build the command with optional env vars and system prompt
-        env_exports = " ".join(
-            f"export {k}={v} &&" for k, v in self.defaults.claude_env.items()
-        )
-        claude_cmd = self.defaults.claude_command
-        if profile_obj and profile_obj.system_prompt.strip():
-            # Shell-escape the system prompt for the command line
-            escaped_prompt = profile_obj.system_prompt.strip().replace("'", "'\\''")
-            claude_cmd = f"{claude_cmd} --append-system-prompt '{escaped_prompt}'"
-        if env_exports:
-            tmux_command = f"cd {worktree_dir} && {env_exports} {claude_cmd}"
-        else:
-            tmux_command = f"cd {worktree_dir} && {claude_cmd}"
+        tmux_command = self._build_tmux_command(worktree_dir, profile_obj)
 
         if not tmux_utils.create_session(session_name, str(worktree_dir), tmux_command):
             # Cleanup on failure
@@ -628,6 +634,10 @@ class AgentManager:
         On startup, scan for existing forge-* tmux sessions
         and reconstruct self.agents from them, restoring persisted
         metadata (task_description, branch_name, etc.) from the database.
+
+        A second pass recovers orphaned agents whose tmux sessions were destroyed
+        by a full system restart (power failure / reboot) but whose worktrees and
+        database snapshots are still intact.
         """
         # Load saved snapshots keyed by agent_id
         snapshots: dict[str, dict] = {}
@@ -702,5 +712,133 @@ class AgentManager:
             self.agents[short_id] = agent
             recovered += 1
 
+        # --- Power failure recovery ---
+        # Check for snapshots with no matching tmux session but worktree still on disk
+        recovered_ids = set(self.agents.keys())  # Already recovered above
+        for agent_id, snap in snapshots.items():
+            if agent_id in recovered_ids:
+                continue  # Already recovered via tmux session
+
+            # Don't revive agents that were intentionally stopped
+            if snap.get("status") == AgentStatus.STOPPED.value:
+                continue
+
+            project_name = snap.get("project_name", "")
+            try:
+                project = self.registry.get_project(project_name)
+            except KeyError:
+                logger.warning(
+                    "Power recovery: snapshot '%s' references unknown project '%s'",
+                    agent_id,
+                    project_name,
+                )
+                continue
+
+            worktree_path = snap.get("worktree_path", "")
+            if not worktree_path or not Path(worktree_path).is_dir():
+                logger.info(
+                    "Power recovery: skipping agent %s — worktree missing at %s",
+                    agent_id,
+                    worktree_path,
+                )
+                # Clean up stale snapshot
+                if self._db:
+                    from . import database
+                    await database.delete_snapshot(self._db, agent_id)
+                continue
+
+            # Resolve profile for rebuilding the tmux command
+            profile_name = snap.get("profile", "")
+            config = self.registry.config
+            profile_obj = config.get_profile(profile_name) if profile_name else None
+
+            session_name = snap.get("session_name", f"forge__{project_name}__{agent_id}")
+            worktree_dir = Path(worktree_path)
+
+            # Rebuild and create the tmux session
+            tmux_command = self._build_tmux_command(worktree_dir, profile_obj)
+            if not tmux_utils.create_session(session_name, str(worktree_dir), tmux_command):
+                logger.error(
+                    "Power recovery: failed to recreate tmux session for agent %s",
+                    agent_id,
+                )
+                continue
+
+            # Re-enable pipe-pane for output capture
+            output_log = worktree_dir / ".agent_output.log"
+            tmux_utils.enable_pipe_pane(session_name, str(output_log))
+
+            agent = Agent(
+                id=agent_id,
+                project_name=project_name,
+                session_name=session_name,
+                worktree_path=worktree_path,
+                branch_name=snap.get("branch_name", f"agent/{agent_id}/recovered"),
+                status=AgentStatus.STARTING,
+                task_description=snap.get("task_description", ""),
+                profile=profile_name,
+                needs_attention=True,  # Flag for user attention after recovery
+                parked=False,
+                last_response=snap.get("last_response", ""),
+                last_user_message=snap.get("last_user_message", ""),
+                output_log_path=str(output_log),
+            )
+            # Restore created_at from snapshot if available
+            if snap.get("created_at"):
+                try:
+                    agent.created_at = datetime.fromisoformat(snap["created_at"])
+                except (ValueError, TypeError):
+                    pass
+
+            self.agents[agent_id] = agent
+
+            # Log recovery event
+            if self._db:
+                from . import database
+                await database.log_event(
+                    self._db, agent_id, project_name, "power_recovery",
+                    {
+                        "task_description": agent.task_description,
+                        "profile": profile_name,
+                        "previous_status": snap.get("status", ""),
+                    },
+                )
+
+            # Schedule recovery message asynchronously
+            asyncio.ensure_future(
+                self._send_recovery_message(agent_id, agent.task_description, agent.last_user_message)
+            )
+            recovered += 1
+
         if recovered:
-            logger.info("Recovered %d existing agent sessions", recovered)
+            logger.info("Recovered %d agent sessions (including power failure recovery)", recovered)
+
+    async def _send_recovery_message(
+        self, agent_id: str, task: str, last_user_message: str,
+    ) -> None:
+        """Wait for Claude Code to become idle after restart, then send a recovery context message."""
+        # Wait for Claude Code to initialize
+        await asyncio.sleep(5)
+
+        agent = self.agents.get(agent_id)
+        if not agent or agent.status == AgentStatus.STOPPED:
+            return
+
+        # Wait for the idle prompt
+        await self._wait_for_idle(agent_id, "120")
+
+        parts = [
+            "You are being recovered after a system restart (power failure or reboot).",
+            "Your previous session was interrupted. Here is your context:",
+        ]
+        if task:
+            parts.append(f"\n**Original task**: {task}")
+        if last_user_message:
+            parts.append(f"\n**Last message from user**: {last_user_message}")
+        parts.append(
+            "\nPlease review your current state (`git status`, recent changes) and continue working on your task."
+            " If you had completed the task, just confirm completion."
+        )
+
+        recovery_msg = "\n".join(parts)
+        await self.send_message(agent_id, recovery_msg)
