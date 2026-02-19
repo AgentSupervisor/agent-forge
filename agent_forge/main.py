@@ -474,6 +474,7 @@ async def api_send_message(request: Request, agent_id: str):
     if not success:
         raise HTTPException(status_code=500, detail="Failed to send message")
 
+    agent.last_user_message = text
     await log_event(db, agent_id, agent.project_name, "message_sent", {"text": text[:500]})
     return {"status": "sent"}
 

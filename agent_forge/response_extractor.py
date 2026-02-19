@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+from dataclasses import dataclass, field
 
 import httpx
+
+
+@dataclass
+class ExtractionResult:
+    text: str
+    file_paths: list[str] = field(default_factory=list)
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +62,14 @@ _SYSTEM_PROMPT = (
     "- Command output (test results, build logs, etc.)\n"
     "- Spinner lines, progress indicators, UI decorations\n"
     "- Status lines like 'Read file X' or 'Edit file Y'\n\n"
-    "Return the response text as-is, preserving formatting. "
-    "If you cannot identify a clear response, return the last meaningful "
-    "text the agent produced."
+    "Also extract any file paths (screenshots, generated images, documents) that the agent "
+    "produced and that are relevant to share with the user.\n\n"
+    "Return a JSON object with this exact shape:\n"
+    '{"text": "the extracted response text", "files": ["/path/to/file.png"]}\n\n'
+    "The 'text' field should contain the response text as-is, preserving formatting. "
+    "The 'files' field should list absolute file paths the agent produced for the user. "
+    "If no relevant files were produced, use an empty list. "
+    "If you cannot identify a clear response, use the last meaningful text the agent produced."
 )
 
 
@@ -90,7 +103,7 @@ def preprocess_output(raw: str) -> str:
     return "\n".join(result_lines)
 
 
-def extract_response_regex(raw: str) -> str:
+def extract_response_regex(raw: str) -> ExtractionResult:
     """Improved regex-based response extraction fallback.
 
     More generous than the old 15-line summary: takes up to 50 meaningful lines
@@ -104,9 +117,9 @@ def extract_response_regex(raw: str) -> str:
     meaningful = [ln for ln in lines if not _NOISE_RE.match(ln)]
     meaningful = _dedup_consecutive(meaningful)
     if not meaningful:
-        return ""
+        return ExtractionResult(text="")
     tail = [ln[:200] for ln in meaningful[-50:]]
-    return "\n".join(tail)
+    return ExtractionResult(text="\n".join(tail))
 
 
 async def extract_response(
@@ -116,14 +129,20 @@ async def extract_response(
     model: str = "claude-haiku-4-5-20251001",
     max_tokens: int = 4000,
     timeout: float = 15.0,
-) -> str | None:
+    user_question: str = "",
+) -> ExtractionResult | None:
     """Call the Anthropic Messages API to extract the agent's response from terminal output.
 
-    Returns the extracted response text, or None on any failure.
+    Returns an ExtractionResult with the extracted text and any file paths, or None on failure.
     """
     preprocessed = preprocess_output(raw_output)
     if not preprocessed.strip():
         return None
+
+    user_content = "Extract the agent's response from this terminal output:\n\n"
+    if user_question:
+        user_content += f"The user asked: '{user_question}'\n\n"
+    user_content += f"```\n{preprocessed}\n```"
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -141,10 +160,7 @@ async def extract_response(
                     "messages": [
                         {
                             "role": "user",
-                            "content": (
-                                "Extract the agent's response from this terminal output:\n\n"
-                                f"```\n{preprocessed}\n```"
-                            ),
+                            "content": user_content,
                         }
                     ],
                 },
@@ -153,9 +169,17 @@ async def extract_response(
             data = resp.json()
             blocks = data.get("content", [])
             text_parts = [b["text"] for b in blocks if b.get("type") == "text"]
-            if text_parts:
-                return "\n".join(text_parts).strip()
-            return None
+            if not text_parts:
+                return None
+            raw_text = "\n".join(text_parts).strip()
+            try:
+                parsed = json.loads(raw_text)
+                return ExtractionResult(
+                    text=parsed.get("text", raw_text),
+                    file_paths=parsed.get("files", []),
+                )
+            except (json.JSONDecodeError, TypeError):
+                return ExtractionResult(text=raw_text)
     except httpx.TimeoutException:
         logger.debug("Response extractor timed out after %.1fs", timeout)
         return None
