@@ -142,7 +142,10 @@ class TerminalBridge:
                         logger.debug(
                             "Failed to send bytes to WebSocket client; removing", exc_info=True
                         )
-                        self._clients.discard(ws) if hasattr(self._clients, "discard") else None
+                        try:
+                            self._clients.remove(ws)
+                        except ValueError:
+                            pass
 
         except asyncio.CancelledError:
             raise
@@ -207,43 +210,30 @@ class TerminalBridge:
     async def handle_input(self, data: bytes) -> None:
         """Forward keyboard input from the client to the tmux session.
 
-        Printable text is sent via ``send-keys -l`` (literal mode).  Control
-        characters are mapped to named tmux key names.
+        Printable ASCII text is sent via ``send-keys -l`` (literal mode).
+        Any input that contains non-printable bytes (control characters, escape
+        sequences, etc.) is sent via ``send-keys -H`` (hex mode) so that raw
+        control bytes never corrupt the line-oriented tmux control mode protocol.
         """
         if not self._running or self._process is None:
             return
 
-        try:
-            text = data.decode("utf-8", errors="replace")
-        except Exception:
-            return
+        # Check if ALL bytes are printable ASCII (0x20–0x7E)
+        all_printable = all(0x20 <= b <= 0x7E for b in data)
 
-        # Map well-known control characters to named tmux keys
-        _CONTROL_KEYS: dict[str, str] = {
-            "\r": "Enter",
-            "\n": "Enter",
-            "\x03": "C-c",
-            "\x04": "C-d",
-            "\x1b": "Escape",
-            "\x7f": "BSpace",
-        }
-
-        if text in _CONTROL_KEYS:
-            await self._send_command(
-                f"send-keys -t {self.session_name} {_CONTROL_KEYS[text]}"
-            )
-        elif len(text) == 1 and ord(text) < 32:
-            # Other single control characters: send as C-<letter>
-            ctrl_letter = chr(ord(text) + 64)
-            await self._send_command(
-                f"send-keys -t {self.session_name} C-{ctrl_letter}"
-            )
-        else:
-            # Printable (possibly multi-character) text — use literal mode
-            # Escape single quotes in the payload so the shell does not misparse
+        if all_printable:
+            # Safe to send as literal text
+            text = data.decode("ascii")
             escaped = text.replace("'", "'\\''")
             await self._send_command(
                 f"send-keys -t {self.session_name} -l -- '{escaped}'"
+            )
+        else:
+            # Contains control/escape characters — use hex mode to avoid
+            # injecting raw ESC bytes into the control mode command stream.
+            hex_bytes = " ".join(f"{b:02x}" for b in data)
+            await self._send_command(
+                f"send-keys -t {self.session_name} -H {hex_bytes}"
             )
 
     async def handle_resize(self, cols: int, rows: int) -> None:
