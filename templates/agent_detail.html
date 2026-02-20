@@ -4,7 +4,7 @@
 {% block content %}
 <div x-data="agentDetail()" style="display:flex; height:100vh;">
 
-    <!-- Left: terminal + input bar -->
+    <!-- Left: terminal -->
     <div style="flex:1; display:flex; flex-direction:column; min-width:0;">
 
         <!-- Header bar -->
@@ -31,53 +31,10 @@
             <div id="terminal-container" style="position:absolute; inset:0; border-radius:0; background:#080a0e;"></div>
         </div>
 
-        <!-- Multi-line input bar -->
-        <div style="display:flex; align-items:flex-end; gap:8px; padding:8px 12px; border-top:1px solid var(--border); background:#0d1117; flex-shrink:0;">
-            <textarea id="terminal-input"
-                rows="1"
-                placeholder="Type message... (Shift+Enter for new line)"
-                style="flex:1; resize:none; background:#161b22; color:#e2e8f0; border:1px solid rgba(99,102,241,0.3); border-radius:8px; padding:8px 12px; font-family:'JetBrains Mono','SF Mono','Fira Code',monospace; font-size:13px; line-height:1.4; max-height:150px; outline:none; transition:border-color 0.2s;"
-                onfocus="this.style.borderColor='rgba(99,102,241,0.6)'"
-                onblur="this.style.borderColor='rgba(99,102,241,0.3)'"
-            ></textarea>
-            <button id="terminal-send-btn"
-                onclick="submitTerminalInput()"
-                style="flex-shrink:0; width:36px; height:36px; border-radius:8px; border:none; background:rgba(99,102,241,0.8); color:white; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:background 0.2s;"
-                onmouseenter="this.style.background='rgba(99,102,241,1)'"
-                onmouseleave="this.style.background='rgba(99,102,241,0.8)'"
-                title="Send (Enter)">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-            </button>
-        </div>
-
-        <!-- Shortcut hints (shown when agent is waiting for input) -->
-        <div id="shortcut-hints"
-            style="display:none; padding:6px 16px; border-top:1px solid var(--border); background:var(--bg-surface); flex-shrink:0; font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">
-            <span style="color:var(--text-secondary);">Input bar below for multi-line</span>
-            <span style="margin-left:16px;"><kbd class="kbd">Shift+Enter</kbd> New line</span>
-            <span style="margin-left:12px;"><kbd class="kbd">Ctrl+C</kbd> Interrupt</span>
-            <span style="margin-left:12px;"><kbd class="kbd">Esc</kbd> Reject</span>
-        </div>
     </div>
 
     <!-- Right panel -->
     <div class="detail-panel" style="width:320px; flex-shrink:0; display:flex; flex-direction:column;">
-
-        <!-- Quick controls -->
-        <div class="detail-section">
-            <h3>Quick Controls</h3>
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px;">
-                <button class="btn btn-success btn-sm" onclick="sendControl('approve')">Approve</button>
-                <button class="btn btn-success btn-sm" style="background:rgba(16,185,129,0.2);"
-                    onclick="sendControl('approve_all')">Always</button>
-                <button class="btn btn-warning btn-sm" onclick="sendControl('reject')">Reject</button>
-                <button class="btn btn-danger btn-sm" onclick="sendControl('interrupt')">Ctrl+C</button>
-            </div>
-            <div style="display:flex; gap:6px;">
-                <button class="btn btn-ghost btn-xs" style="flex:1;" onclick="sendControl('up')">&#9650; Up</button>
-                <button class="btn btn-ghost btn-xs" style="flex:1;" onclick="sendControl('down')">&#9660; Down</button>
-            </div>
-        </div>
 
         <!-- Agent info -->
         <div class="detail-section">
@@ -235,25 +192,6 @@
         } catch (e) { /* silent */ }
     }
 
-    async function sendControl(action) {
-        try {
-            const res = await fetch('/api/agents/' + AGENT_ID + '/control', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action }),
-            });
-            if (res.ok) {
-                showToast('Sent: ' + action);
-                loadEvents();
-            } else {
-                const detail = await res.json().then(d => d.detail || 'Failed').catch(() => res.statusText);
-                showToast(detail, true);
-            }
-        } catch (e) {
-            showToast('Error: ' + e.message, true);
-        }
-    }
-
     async function restartAgent() {
         if (!confirm('Restart agent ' + AGENT_ID + '? This will kill it and spawn a new one with the same task.')) return;
         try {
@@ -287,30 +225,6 @@
         }
     }
 
-    // --- Multi-line input bar ---
-    const terminalInput = document.getElementById('terminal-input');
 
-    terminalInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
-            e.preventDefault();
-            submitTerminalInput();
-        }
-    });
-
-    terminalInput.addEventListener('input', () => {
-        // Auto-resize
-        terminalInput.style.height = 'auto';
-        terminalInput.style.height = Math.min(terminalInput.scrollHeight, 150) + 'px';
-    });
-
-    function submitTerminalInput() {
-        const text = terminalInput.value;
-        if (!text) return;
-        agentTerminal.sendTextInput(text);
-        terminalInput.value = '';
-        terminalInput.style.height = 'auto';
-        // Refocus terminal after sending
-        if (agentTerminal.terminal) agentTerminal.terminal.focus();
-    }
 </script>
 {% endblock %}
