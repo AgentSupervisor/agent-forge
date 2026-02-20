@@ -341,7 +341,7 @@ class ClaudeUsageCollector:
             if is_active and block_entries:
                 last_ts = block_entries[-1]["timestamp"]
                 duration_min = max((last_ts - start).total_seconds() / 60, 1.0)
-                total_tokens = total_input + total_output + total_cache_create + total_cache_read
+                total_tokens = total_input + total_output
                 burn_rate_tpm = total_tokens / duration_min
                 burn_rate_cph = (total_cost / duration_min) * 60
 

@@ -88,8 +88,8 @@
                             <div class="burn-rate-label">tokens / min</div>
                         </div>
                         <div>
-                            <div class="burn-rate-value" x-text="claudeUsage && claudeUsage.current_block && claudeUsage.current_block.burn_rate_cost_per_hour != null ? formatCost(claudeUsage.current_block.burn_rate_cost_per_hour) : '--'">--</div>
-                            <div class="burn-rate-label">cost / hour</div>
+                            <div class="burn-rate-value" x-text="claudeUsage && claudeUsage.current_block && claudeUsage.current_block.burn_rate_cost_per_hour != null ? formatCost(claudeUsage.current_block.burn_rate_cost_per_hour / 60) : '--'">--</div>
+                            <div class="burn-rate-label">cost / min</div>
                         </div>
                     </div>
                 </div>
