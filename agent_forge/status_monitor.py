@@ -69,6 +69,9 @@ class StatusMonitor:
         self._resized_sessions: set[str] = set()
         self.metrics_collector: object | None = None
         self._last_metrics_collect: float = 0.0
+        self.claude_usage_collector: object | None = None
+        self._last_claude_usage_collect: float = 0.0
+        self._cached_claude_usage: dict | None = None
 
         # Initialize metrics collector if enabled and psutil is available
         if config and config.defaults.metrics.enabled:
@@ -185,10 +188,21 @@ class StatusMonitor:
             if now - self._last_metrics_collect >= interval:
                 try:
                     snapshot = self.metrics_collector.collect_all(self.agent_manager)
-                    await self.ws_manager.broadcast_metrics(snapshot)
+                    await self.ws_manager.broadcast_metrics(snapshot, claude_usage=self._cached_claude_usage)
                 except Exception:
                     logger.exception("Metrics collection failed")
                 self._last_metrics_collect = now
+
+        # Collect Claude Code usage data at a longer interval (15s)
+        if self.claude_usage_collector:
+            now_cu = time.time()
+            if now_cu - self._last_claude_usage_collect >= 15.0:
+                try:
+                    usage_snapshot = self.claude_usage_collector.collect(hours_back=24)
+                    self._cached_claude_usage = usage_snapshot.model_dump(mode="json")
+                except Exception:
+                    logger.exception("Claude usage collection failed")
+                self._last_claude_usage_collect = now_cu
 
     async def _notify_channels(
         self, project_name: str, text: str, media_paths: list[str] | None = None

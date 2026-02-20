@@ -149,6 +149,8 @@ async def lifespan(app: FastAPI):
     # Claude Code usage collector
     claude_usage = ClaudeUsageCollector()
     app.state.claude_usage = claude_usage
+    if status_monitor:
+        status_monitor.claude_usage_collector = claude_usage
 
     yield
 

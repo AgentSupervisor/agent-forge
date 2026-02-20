@@ -225,7 +225,7 @@ class TestStatusMonitorPoll:
 
         # Verify metrics were collected and broadcast
         mock_collector.collect_all.assert_called_once_with(manager)
-        ws.broadcast_metrics.assert_called_once_with(mock_snapshot)
+        ws.broadcast_metrics.assert_called_once_with(mock_snapshot, claude_usage=None)
         assert monitor._last_metrics_collect == 10.0
 
 

@@ -424,11 +424,14 @@ function metricsPage() {
             // Load Claude usage data
             this.loadClaudeUsage();
             var self = this;
-            setInterval(function () { self.loadClaudeUsage(); }, 30000);
+            setInterval(function () { self.loadClaudeUsage(); }, 60000);
         },
 
         updateMetrics(data) {
             _updatePage(data);
+            if (data.claude_usage) {
+                this.claudeUsage = data.claude_usage;
+            }
         },
 
         loadClaudeUsage() {
