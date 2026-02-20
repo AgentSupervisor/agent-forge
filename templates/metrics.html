@@ -29,20 +29,20 @@
                     <div class="metric-card-header">
                         <span class="metric-label">Current Session</span>
                     </div>
-                    <div class="claude-cost-big" x-text="claudeUsage ? formatCost(claudeUsage.current_block.total_cost_usd) : '--'">--</div>
+                    <div class="claude-cost-big" x-text="claudeUsage && claudeUsage.current_block ? formatCost(claudeUsage.current_block.total_cost_usd) : '--'">--</div>
                     <div style="font-size:11px; color:var(--text-muted); margin-bottom:16px;">Current 5h block</div>
                     <div class="metric-details">
                         <div class="metric-detail-row">
                             <span>Input tokens</span>
-                            <span x-text="claudeUsage ? formatTokens(claudeUsage.current_block.total_input_tokens) : '--'">--</span>
+                            <span x-text="claudeUsage && claudeUsage.current_block ? formatTokens(claudeUsage.current_block.total_input_tokens) : '--'">--</span>
                         </div>
                         <div class="metric-detail-row">
                             <span>Output tokens</span>
-                            <span x-text="claudeUsage ? formatTokens(claudeUsage.current_block.total_output_tokens) : '--'">--</span>
+                            <span x-text="claudeUsage && claudeUsage.current_block ? formatTokens(claudeUsage.current_block.total_output_tokens) : '--'">--</span>
                         </div>
                         <div class="metric-detail-row">
                             <span>Messages</span>
-                            <span x-text="claudeUsage ? claudeUsage.current_block.message_count : '--'">--</span>
+                            <span x-text="claudeUsage && claudeUsage.current_block ? claudeUsage.current_block.message_count : '--'">--</span>
                         </div>
                     </div>
                     <!-- Visual progress bar (indeterminate) -->
@@ -56,7 +56,7 @@
                     <div class="metric-card-header">
                         <span class="metric-label">Per-Model Breakdown</span>
                     </div>
-                    <template x-if="claudeUsage && Object.keys(claudeUsage.current_block.models).length > 0">
+                    <template x-if="claudeUsage && claudeUsage.current_block && Object.keys(claudeUsage.current_block.models).length > 0">
                         <div>
                             <template x-for="[modelKey, modelData] in Object.entries(claudeUsage.current_block.models)" :key="modelKey">
                                 <div class="model-row">
@@ -72,7 +72,7 @@
                             </template>
                         </div>
                     </template>
-                    <template x-if="!claudeUsage || Object.keys(claudeUsage.current_block.models).length === 0">
+                    <template x-if="!claudeUsage || !claudeUsage.current_block || Object.keys(claudeUsage.current_block.models).length === 0">
                         <div style="color:var(--text-muted); font-size:13px; padding:16px 0;">No model data</div>
                     </template>
                 </div>
@@ -84,11 +84,11 @@
                     </div>
                     <div style="display:flex; flex-direction:column; gap:20px; padding-top:8px;">
                         <div>
-                            <div class="burn-rate-value" x-text="claudeUsage && claudeUsage.current_block.burn_rate_tokens_per_min != null ? formatTokens(claudeUsage.current_block.burn_rate_tokens_per_min) : '--'">--</div>
+                            <div class="burn-rate-value" x-text="claudeUsage && claudeUsage.current_block && claudeUsage.current_block.burn_rate_tokens_per_min != null ? formatTokens(claudeUsage.current_block.burn_rate_tokens_per_min) : '--'">--</div>
                             <div class="burn-rate-label">tokens / min</div>
                         </div>
                         <div>
-                            <div class="burn-rate-value" x-text="claudeUsage && claudeUsage.current_block.burn_rate_cost_per_hour != null ? formatCost(claudeUsage.current_block.burn_rate_cost_per_hour) : '--'">--</div>
+                            <div class="burn-rate-value" x-text="claudeUsage && claudeUsage.current_block && claudeUsage.current_block.burn_rate_cost_per_hour != null ? formatCost(claudeUsage.current_block.burn_rate_cost_per_hour) : '--'">--</div>
                             <div class="burn-rate-label">cost / hour</div>
                         </div>
                     </div>
