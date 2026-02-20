@@ -307,7 +307,7 @@ class TerminalBridge:
         while i < len(data):
             if data[i] == "\\" and i + 1 < len(data):
                 if data[i + 1] == "\\":
-                    result.append(ord("\\"))
+                    result.append(0x5c)
                     i += 2
                 elif (
                     i + 3 < len(data)
@@ -316,10 +316,10 @@ class TerminalBridge:
                     result.append(int(data[i + 1 : i + 4], 8))
                     i += 4
                 else:
-                    result.append(ord(data[i]))
+                    result.extend(data[i].encode("utf-8"))
                     i += 1
             else:
-                result.append(ord(data[i]))
+                result.extend(data[i].encode("utf-8"))
                 i += 1
         return bytes(result)
 
