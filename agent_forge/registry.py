@@ -64,6 +64,10 @@ class ProjectRegistry:
                 errors.append(
                     f"Project '{name}': not a git repo (no .git): {project.path}"
                 )
+            if project.execution == "remote" and self.config.remote is None:
+                errors.append(
+                    f"Project '{name}': execution is 'remote' but no remote config defined"
+                )
         if errors:
             for err in errors:
                 logger.warning(err)

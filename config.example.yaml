@@ -181,6 +181,21 @@ defaults:
     model: claude-haiku-4-5-20251001
     max_tokens: 300
     timeout_seconds: 10.0
+# Remote execution via Docker Swarm (optional).
+# Uncomment and configure to enable running agents on a remote VM.
+# remote:
+#   docker_context: vm              # Docker context pointing to the remote host
+#   vm_ip: ''                       # IP address of the remote VM
+#   image: ''                       # Docker image for agent containers
+#   ttyd_port_range_start: 30000    # Start of port range for ttyd web terminals
+#   ttyd_port_range_end: 32767      # End of port range for ttyd web terminals
+#   cleanup_after_hours: 24         # Auto-remove containers after this many hours
+#   cpu_limit: '1'                  # CPU limit per container
+#   memory_limit: 2G               # Memory limit per container
+#   config_repo: ''                 # Git repo with shared agent config (.claude/, etc.)
+#   ttyd_user: agent                # Username for ttyd web terminal auth
+#   ttyd_pass_env: AGENT_TTYD_PASS  # Env var name containing the ttyd password
+
 profiles: {}
 projects:
   agent-forge:
@@ -189,6 +204,7 @@ projects:
     max_agents: 6
     description: Agent Forge lets you run multiple Claude Code agents in parallel
       across different git repositories.
+    execution: local
     sandbox: null
     channels: []
     agent_instructions: |
@@ -218,6 +234,7 @@ projects:
     default_branch: main
     max_agents: 3
     description: A short description of your project.
+    execution: local
     sandbox: null
     channels:
     - connector_id: my-telegram

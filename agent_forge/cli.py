@@ -1,4 +1,4 @@
-"""CLI entry point — forge init / start / stop / status / service."""
+"""CLI entry point — forge init / start / stop / status / service / remote."""
 
 from __future__ import annotations
 
@@ -450,6 +450,121 @@ def cmd_service(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# forge remote validate
+# ---------------------------------------------------------------------------
+
+def cmd_remote_validate(args: argparse.Namespace) -> None:
+    """Validate remote execution configuration."""
+    from .registry import ProjectRegistry
+
+    config_path = Path(args.config)
+    if not config_path.exists():
+        print(f"Config not found: {config_path}")
+        print("Run 'forge init' first to create a config file.")
+        sys.exit(1)
+
+    registry = ProjectRegistry(config_path=str(config_path))
+    remote = registry.config.remote
+
+    if remote is None:
+        print("No remote config found in config.yaml.")
+        print("Add a 'remote:' section to enable remote execution.")
+        sys.exit(1)
+
+    passed = 0
+    failed = 0
+
+    def check(name: str, ok: bool, detail: str = "") -> None:
+        nonlocal passed, failed
+        if ok:
+            passed += 1
+            print(f"  PASS  {name}")
+        else:
+            failed += 1
+            msg = f"  FAIL  {name}"
+            if detail:
+                msg += f" — {detail}"
+            print(msg)
+
+    print("Validating remote config...\n")
+
+    # 1. Docker context
+    try:
+        result = subprocess.run(
+            ["docker", "--context", remote.docker_context, "info"],
+            capture_output=True, text=True, timeout=30,
+        )
+        check("Docker context", result.returncode == 0,
+              f"'docker --context {remote.docker_context} info' failed" if result.returncode != 0 else "")
+    except FileNotFoundError:
+        check("Docker context", False, "docker not found in PATH")
+    except subprocess.TimeoutExpired:
+        check("Docker context", False, "timed out")
+
+    # 2. Docker image on remote
+    try:
+        result = subprocess.run(
+            ["docker", "--context", remote.docker_context, "image", "inspect", remote.image],
+            capture_output=True, text=True, timeout=30,
+        )
+        check("Docker image", result.returncode == 0,
+              f"image '{remote.image}' not found on remote" if result.returncode != 0 else "")
+    except FileNotFoundError:
+        check("Docker image", False, "docker not found in PATH")
+    except subprocess.TimeoutExpired:
+        check("Docker image", False, "timed out")
+
+    # 3. Config repo
+    if remote.config_repo:
+        try:
+            result = subprocess.run(
+                ["git", "ls-remote", remote.config_repo],
+                capture_output=True, text=True, timeout=30,
+            )
+            check("Config repo", result.returncode == 0,
+                  f"cannot reach '{remote.config_repo}'" if result.returncode != 0 else "")
+        except FileNotFoundError:
+            check("Config repo", False, "git not found in PATH")
+        except subprocess.TimeoutExpired:
+            check("Config repo", False, "timed out")
+    else:
+        check("Config repo", False, "config_repo is empty")
+
+    # 4. CLAUDE_CODE_OAUTH_TOKEN
+    has_oauth = bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"))
+    if not has_oauth:
+        creds_path = Path.home() / ".claude" / ".credentials.json"
+        has_oauth = creds_path.exists()
+    check("Claude OAuth token", has_oauth,
+          "set CLAUDE_CODE_OAUTH_TOKEN or ensure ~/.claude/.credentials.json exists" if not has_oauth else "")
+
+    # 5. GITHUB_TOKEN
+    has_gh = bool(os.environ.get("GITHUB_TOKEN"))
+    check("GITHUB_TOKEN", has_gh,
+          "set GITHUB_TOKEN env var" if not has_gh else "")
+
+    # 6. SSH key
+    ssh_key = Path.home() / ".ssh" / "id_rsa"
+    check("SSH key", ssh_key.exists(),
+          f"{ssh_key} not found" if not ssh_key.exists() else "")
+
+    # 7. ttyd password env var
+    ttyd_env = remote.ttyd_pass_env
+    has_ttyd = bool(os.environ.get(ttyd_env))
+    check(f"ttyd password ({ttyd_env})", has_ttyd,
+          f"set {ttyd_env} env var" if not has_ttyd else "")
+
+    # Summary
+    total = passed + failed
+    print(f"\n{passed}/{total} checks passed.")
+    if failed:
+        print(f"{failed} issue(s) found.")
+        sys.exit(1)
+    else:
+        print("All checks passed.")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -490,11 +605,26 @@ def main() -> None:
     p_svc = sub.add_parser("service", help="Generate systemd/launchd service file")
     p_svc.add_argument("--dry-run", action="store_true", help="Print without writing")
 
+    # remote
+    p_remote = sub.add_parser("remote", help="Remote execution commands")
+    remote_sub = p_remote.add_subparsers(dest="remote_command")
+    remote_sub.add_parser("validate", help="Validate remote execution config")
+
     args = parser.parse_args()
 
     if not args.command:
         parser.print_help()
         sys.exit(0)
+
+    if args.command == "remote":
+        if not getattr(args, "remote_command", None):
+            p_remote.print_help()
+            sys.exit(0)
+        remote_commands = {
+            "validate": cmd_remote_validate,
+        }
+        remote_commands[args.remote_command](args)
+        return
 
     commands = {
         "init": cmd_init,
