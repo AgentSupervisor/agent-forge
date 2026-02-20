@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import tempfile
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -280,6 +282,65 @@ class TerminalBridge:
             logger.debug(
                 "Failed to resize window for session %s", self.session_name, exc_info=True
             )
+
+    async def handle_text_input(self, text: str) -> None:
+        """Send composed text input to the tmux session.
+
+        Single-line text is sent via send-keys -l (literal).
+        Multi-line text is sent via load-buffer + paste-buffer for
+        atomic bracketed-paste delivery.
+        """
+        if not self._running or self._process is None:
+            return
+
+        if not text:
+            return
+
+        if "\n" not in text:
+            # Single line — send literally then press Enter
+            escaped = text.replace("'", "'\\''")
+            await self._send_command(
+                f"send-keys -t {self.session_name} -l -- '{escaped}'"
+            )
+            await self._send_command(
+                f"send-keys -t {self.session_name} Enter"
+            )
+        else:
+            # Multi-line — use load-buffer + paste-buffer for bracketed paste
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".txt", delete=False
+                ) as tmp:
+                    tmp.write(text)
+                    tmp_path = tmp.name
+
+                # Load into tmux buffer
+                proc = await asyncio.create_subprocess_exec(
+                    "tmux", "load-buffer", tmp_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await proc.communicate()
+
+                # Paste with -p flag for bracketed paste mode
+                proc = await asyncio.create_subprocess_exec(
+                    "tmux", "paste-buffer", "-p", "-t", self.session_name,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await proc.communicate()
+
+                # Send Enter to submit
+                await self._send_command(
+                    f"send-keys -t {self.session_name} Enter"
+                )
+            finally:
+                if tmp_path:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
 
     # ------------------------------------------------------------------
     # Helpers

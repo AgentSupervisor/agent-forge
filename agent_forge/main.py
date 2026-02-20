@@ -1392,13 +1392,17 @@ async def websocket_terminal(websocket: WebSocket, agent_id: str):
                 # Binary frame: keyboard input
                 await bridge.handle_input(message["bytes"])
             elif "text" in message and message["text"]:
-                # Text frame: control message (resize, etc.)
+                # Text frame: control message (resize, input, etc.)
                 try:
                     data = json.loads(message["text"])
                     if data.get("type") == "resize":
                         cols = int(data.get("cols", 80))
                         rows = int(data.get("rows", 24))
                         await bridge.handle_resize(cols, rows)
+                    elif data.get("type") == "input":
+                        text = data.get("text", "")
+                        if text:
+                            await bridge.handle_text_input(text)
                 except (json.JSONDecodeError, ValueError, TypeError):
                     pass
     except (WebSocketDisconnect, RuntimeError):
