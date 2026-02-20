@@ -171,6 +171,12 @@ class AgentTerminal {
         }, this._reconnectDelay);
     }
 
+    sendTextInput(text) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: 'input', text: text }));
+        }
+    }
+
     dispose() {
         this._disposed = true;
         clearTimeout(this._reconnectTimer);
