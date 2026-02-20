@@ -1386,6 +1386,8 @@ async def websocket_terminal(websocket: WebSocket, agent_id: str):
     try:
         while True:
             message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
             if "bytes" in message and message["bytes"]:
                 # Binary frame: keyboard input
                 await bridge.handle_input(message["bytes"])
@@ -1399,7 +1401,7 @@ async def websocket_terminal(websocket: WebSocket, agent_id: str):
                         await bridge.handle_resize(cols, rows)
                 except (json.JSONDecodeError, ValueError, TypeError):
                     pass
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
         no_clients = bridge.remove_client(websocket)

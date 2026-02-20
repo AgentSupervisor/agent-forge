@@ -165,6 +165,14 @@ class TerminalBridge:
                 "Unexpected error in _read_output for session %s", self.session_name
             )
             self._running = False
+        finally:
+            # Close all client WebSockets so browsers detect the disconnect
+            # and reconnect, getting a fresh bridge.
+            for ws in list(self._clients):
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------
     # Client management
