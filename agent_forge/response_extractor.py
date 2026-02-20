@@ -47,21 +47,40 @@ _NOISE_RE = re.compile(
     r"|^\s*Thinking\.*\s*$"                    # Claude "Thinking..." status
     r"|^\s*claude-\S+\s*$"                     # bare model name lines (e.g. claude-sonnet-4-6)
     r"|^\s*\d+[,.]?\d*\s*tokens?\s*$"         # token count lines
+    r"|^\s*⎿"                                  # Claude Code tool output marker
+    r"|^\s*…\s*\+\d+\s+lines?\s*\(ctrl\+o"    # expand hint (… +N lines (ctrl+o to expand))
+    r"|^(?:Bash|Read|Edit|Write|Grep|Glob|Task|MultiEdit|NotebookEdit|WebFetch|WebSearch|AskUser|Skill|EnterPlan|ExitPlan)\(.*"  # tool call headers
+    r"|^(?:diff --git |index [0-9a-f]+\.\.[0-9a-f]+|--- a/|\+\+\+ b/)"  # git diff markers
+    r"|^\s*remote:\s"                          # git remote output
+    r"|^\s*\[[\w/.:-]+\s+[0-9a-f]{7,}\]"      # git commit output [branch hash] message
 )
 
 _BLOCK_MARKER_RE = re.compile(r"^\s*⏺\s?")
 
+_TOOL_HEADER_RE = re.compile(
+    r"^(?:Bash|Read|Edit|Write|Grep|Glob|Task|MultiEdit|NotebookEdit|"
+    r"WebFetch|WebSearch|AskUser|Skill|EnterPlan|ExitPlan)\("
+)
+
+_TOOL_OUTPUT_RE = re.compile(r"^\s*⎿")
+
 _SYSTEM_PROMPT = (
     "You are extracting an AI coding agent's response from raw terminal output. "
-    "The terminal contains tool calls, file contents, command output, spinner artifacts, "
-    "and UI chrome mixed with the agent's actual response to the user.\n\n"
-    "Extract ONLY the agent's final response text — the message it wrote to communicate "
-    "its results to the user. Exclude:\n"
-    "- Tool call invocations and their output\n"
+    "The terminal contains the agent's tool calls and their output mixed with "
+    "the agent's actual response to the user.\n\n"
+    "Claude Code uses this format:\n"
+    "- Tool calls appear as: ToolName(args) followed by ⎿ output lines\n"
+    "- The agent's text responses appear as plain text or after ⏺ markers\n"
+    "- Tool names include: Bash, Read, Edit, Write, Grep, Glob, Task, etc.\n\n"
+    "Extract ONLY the agent's final response text — the last message it wrote "
+    "to communicate its results to the user. This is typically the text AFTER "
+    "all tool calls have completed. Exclude:\n"
+    "- Tool call invocations and their output (Bash(...), Read(...), ⎿ lines)\n"
     "- File contents being read or written\n"
-    "- Command output (test results, build logs, etc.)\n"
+    "- Command output (test results, build logs, git output, etc.)\n"
     "- Spinner lines, progress indicators, UI decorations\n"
-    "- Status lines like 'Read file X' or 'Edit file Y'\n\n"
+    "- Status lines like 'Read file X' or 'Edit file Y'\n"
+    "- Git diffs, commit hashes, remote push output\n\n"
     "Also extract any file paths (screenshots, generated images, documents) that the agent "
     "produced and that are relevant to share with the user.\n\n"
     "Return a JSON object with this exact shape:\n"
@@ -71,6 +90,30 @@ _SYSTEM_PROMPT = (
     "If no relevant files were produced, use an empty list. "
     "If you cannot identify a clear response, use the last meaningful text the agent produced."
 )
+
+
+def _strip_tool_blocks(lines: list[str]) -> list[str]:
+    """Remove Claude Code tool call blocks (header + ⎿ output lines).
+
+    A tool block starts with a tool invocation header (e.g. 'Bash(...)')
+    and includes all subsequent lines starting with '⎿' (tool output marker).
+    """
+    result: list[str] = []
+    in_tool_block = False
+    for line in lines:
+        if _TOOL_HEADER_RE.match(line):
+            in_tool_block = True
+            continue
+        if in_tool_block:
+            if _TOOL_OUTPUT_RE.match(line):
+                continue
+            # Also skip expand hints within tool blocks
+            stripped = line.strip()
+            if stripped.startswith("…") and "lines" in stripped and "ctrl+o" in stripped:
+                continue
+            in_tool_block = False
+        result.append(line)
+    return result
 
 
 def _dedup_consecutive(lines: list[str]) -> list[str]:
@@ -93,6 +136,7 @@ def preprocess_output(raw: str) -> str:
     lines = [ln for ln in lines if ln.strip()]
     meaningful = [ln for ln in lines if not _NOISE_RE.match(ln)]
     meaningful = _dedup_consecutive(meaningful)
+    meaningful = _strip_tool_blocks(meaningful)
     result_lines: list[str] = []
     total = 0
     for line in reversed(meaningful):
@@ -104,21 +148,68 @@ def preprocess_output(raw: str) -> str:
 
 
 def extract_response_regex(raw: str) -> ExtractionResult:
-    """Improved regex-based response extraction fallback.
+    """Block-aware regex-based response extraction fallback.
 
-    More generous than the old 15-line summary: takes up to 50 meaningful lines
-    with 200-char line truncation.
+    Identifies the last response block by looking for ⏺-delimited text
+    sections that aren't tool calls. Falls back to last 30 meaningful
+    lines with 200-char line truncation.
     """
     cleaned = _ANSI_RE.sub("", raw)
     lines = [ln for ln in cleaned.splitlines() if ln.strip()]
-    # Strip Claude Code block marker (⏺) prefix — preserve the text that follows
+
+    # Try block-based extraction first: find the last ⏺ text block
+    # that is NOT a tool call
+    last_response_start = -1
+    for i in range(len(lines) - 1, -1, -1):
+        stripped = lines[i].strip()
+        # Check for ⏺ followed by text (not a tool call)
+        marker_match = _BLOCK_MARKER_RE.match(stripped)
+        if marker_match:
+            after_marker = _BLOCK_MARKER_RE.sub("", stripped).strip()
+            if after_marker and not _TOOL_HEADER_RE.match(after_marker):
+                last_response_start = i
+                break
+
+    if last_response_start >= 0:
+        # Extract from this block marker to the next tool call or block marker
+        block_lines: list[str] = []
+        for j in range(last_response_start, len(lines)):
+            line = lines[j]
+            stripped = line.strip()
+            # Strip the ⏺ prefix from the first line
+            if j == last_response_start:
+                line = _BLOCK_MARKER_RE.sub("", line)
+                if not line.strip():
+                    continue
+            elif _BLOCK_MARKER_RE.match(stripped):
+                # Next block — check if it's a continuation or new block
+                after = _BLOCK_MARKER_RE.sub("", stripped).strip()
+                if _TOOL_HEADER_RE.match(after):
+                    break  # Tool call block — stop
+                if after:
+                    break  # Another text block — stop
+                continue  # Bare ⏺ — skip
+            elif _TOOL_HEADER_RE.match(stripped):
+                break
+            elif _TOOL_OUTPUT_RE.match(stripped):
+                break
+            # Filter noise within the block
+            if _NOISE_RE.match(line):
+                continue
+            block_lines.append(line[:200])
+
+        if block_lines:
+            return ExtractionResult(text="\n".join(block_lines))
+
+    # Fallback: strip tool blocks and take last 30 lines
     lines = [_BLOCK_MARKER_RE.sub("", ln) for ln in lines]
     lines = [ln for ln in lines if ln.strip()]
     meaningful = [ln for ln in lines if not _NOISE_RE.match(ln)]
     meaningful = _dedup_consecutive(meaningful)
+    meaningful = _strip_tool_blocks(meaningful)
     if not meaningful:
         return ExtractionResult(text="")
-    tail = [ln[:200] for ln in meaningful[-50:]]
+    tail = [ln[:200] for ln in meaningful[-30:]]
     return ExtractionResult(text="\n".join(tail))
 
 
