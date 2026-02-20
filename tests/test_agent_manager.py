@@ -497,11 +497,11 @@ class TestStartSequence:
 
     @pytest.mark.asyncio
     async def test_default_start_sequence(self, manager):
-        """Without a profile, the default start sequence is wait 3s + send task."""
+        """Without a profile, the default start sequence is wait_for_idle + send task."""
         steps = manager._get_start_sequence(profile=None, task="do something")
         assert len(steps) == 2
-        assert steps[0].action == "wait"
-        assert steps[0].value == "3"
+        assert steps[0].action == "wait_for_idle"
+        assert steps[0].value == "60"
         assert steps[1].action == "send"
         assert steps[1].value == "{task}"
 

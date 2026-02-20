@@ -191,10 +191,10 @@ class AgentManager:
         if profile and profile.start_sequence:
             return profile.start_sequence
 
-        # Default sequence: wait 3s then send task
+        # Default sequence: wait for idle prompt then send task
         if task:
             return [
-                StartSequenceStep(action="wait", value="3"),
+                StartSequenceStep(action="wait_for_idle", value="60"),
                 StartSequenceStep(action="send", value="{task}"),
             ]
         return []
