@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import time
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -160,6 +161,8 @@ def send_keys(session_name: str, text: str, enter: bool = True) -> bool:
             return False
 
     if enter:
+        # Small delay so the TUI can process the pasted text before Enter
+        time.sleep(0.1)
         # Two Enters: first closes the line, second submits the prompt
         _run(["tmux", "send-keys", "-t", session_name, "Enter"])
         _run(["tmux", "send-keys", "-t", session_name, "Enter"])
