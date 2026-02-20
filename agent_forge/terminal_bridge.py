@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from fastapi import WebSocket
 
-__all__ = ["TerminalBridge", "TerminalBridgeManager"]
+__all__ = ["TerminalBridge", "RemoteTerminalBridge", "TerminalBridgeManager"]
 
 logger = logging.getLogger(__name__)
 
@@ -406,39 +406,202 @@ class TerminalBridge:
         return len(self._clients)
 
 
+class RemoteTerminalBridge:
+    """Proxies a ttyd WebSocket running inside a Docker Swarm container.
+
+    Connects to ``ws://{vm_ip}:{ttyd_port}/ws`` and relays data between
+    the remote ttyd instance and local WebSocket clients.
+    """
+
+    def __init__(self, session_name: str, ws_url: str) -> None:
+        self.session_name: str = session_name
+        self._ws_url: str = ws_url
+        self._clients: list[WebSocket] = []
+        self._running: bool = False
+        self._reader_task: asyncio.Task | None = None
+        self._remote_ws: object | None = None  # aiohttp or websockets connection
+
+    async def start(self) -> bool:
+        """Connect to the remote ttyd WebSocket.
+
+        Returns True on success, False if the connection cannot be established.
+        """
+        try:
+            import websockets
+            self._remote_ws = await websockets.connect(self._ws_url)
+        except ImportError:
+            logger.error("websockets package not installed; remote terminal unavailable")
+            return False
+        except Exception:
+            logger.warning("Failed to connect to remote ttyd at %s", self._ws_url)
+            return False
+
+        self._running = True
+        self._reader_task = asyncio.create_task(self._read_remote())
+        logger.info("RemoteTerminalBridge started for %s -> %s", self.session_name, self._ws_url)
+        return True
+
+    async def stop(self) -> None:
+        """Disconnect from the remote ttyd and clean up."""
+        self._running = False
+
+        if self._reader_task and not self._reader_task.done():
+            self._reader_task.cancel()
+            try:
+                await self._reader_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._remote_ws:
+            try:
+                await self._remote_ws.close()
+            except Exception:
+                pass
+            self._remote_ws = None
+
+        for ws in list(self._clients):
+            try:
+                await ws.close()
+            except Exception:
+                pass
+        self._clients.clear()
+        logger.info("RemoteTerminalBridge stopped for %s", self.session_name)
+
+    async def _read_remote(self) -> None:
+        """Read from the remote ttyd WebSocket and forward to local clients."""
+        try:
+            async for message in self._remote_ws:
+                if not self._running:
+                    break
+                data = message if isinstance(message, bytes) else message.encode("utf-8")
+                for ws in list(self._clients):
+                    try:
+                        await ws.send_bytes(data)
+                    except Exception:
+                        try:
+                            self._clients.remove(ws)
+                        except ValueError:
+                            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug("Remote ttyd connection closed for %s", self.session_name)
+            self._running = False
+        finally:
+            for ws in list(self._clients):
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+
+    async def add_client(self, ws: WebSocket) -> None:
+        """Add a WebSocket client."""
+        self._clients.append(ws)
+
+    def remove_client(self, ws: WebSocket) -> bool:
+        """Remove a WebSocket client. Returns True if no clients remain."""
+        try:
+            self._clients.remove(ws)
+        except ValueError:
+            pass
+        return len(self._clients) == 0
+
+    async def handle_input(self, data: bytes) -> None:
+        """Forward keyboard input to the remote ttyd WebSocket."""
+        if not self._running or not self._remote_ws:
+            return
+        try:
+            await self._remote_ws.send(data)
+        except Exception:
+            logger.debug("Failed to send input to remote ttyd for %s", self.session_name)
+
+    async def handle_resize(self, cols: int, rows: int) -> None:
+        """Send resize command to remote ttyd (JSON protocol)."""
+        if not self._running or not self._remote_ws:
+            return
+        import json as _json
+        try:
+            resize_msg = _json.dumps({"type": "resize", "cols": cols, "rows": rows})
+            await self._remote_ws.send(resize_msg)
+        except Exception:
+            logger.debug("Failed to send resize to remote ttyd for %s", self.session_name)
+
+    async def handle_text_input(self, text: str) -> None:
+        """Forward text input to the remote ttyd WebSocket."""
+        if not self._running or not self._remote_ws:
+            return
+        try:
+            await self._remote_ws.send(text.encode("utf-8"))
+        except Exception:
+            pass
+
+    @property
+    def client_count(self) -> int:
+        return len(self._clients)
+
+
 class TerminalBridgeManager:
-    """Manages ``TerminalBridge`` instances across all agents.
+    """Manages ``TerminalBridge`` and ``RemoteTerminalBridge`` instances.
 
     Keyed by tmux session name.  Thread-safe via an ``asyncio.Lock``.
     """
 
     def __init__(self) -> None:
-        self._bridges: dict[str, TerminalBridge] = {}
+        self._bridges: dict[str, TerminalBridge | RemoteTerminalBridge] = {}
         self._lock: asyncio.Lock = asyncio.Lock()
 
-    async def get_or_create(self, session_name: str) -> TerminalBridge:
+    async def get_or_create(
+        self,
+        session_name: str,
+        *,
+        agent: object | None = None,
+        remote_config: object | None = None,
+    ) -> TerminalBridge | RemoteTerminalBridge:
         """Return an existing running bridge or create and start a new one.
+
+        For remote agents (agent.location == REMOTE), creates a
+        ``RemoteTerminalBridge`` that proxies the ttyd WebSocket.
 
         Args:
             session_name: The tmux session name to attach to.
+            agent: Optional Agent object — needed for remote agents.
+            remote_config: Optional RemoteConfig — needed for remote agents.
 
         Returns:
-            A started ``TerminalBridge`` instance.
+            A started bridge instance.
 
         Raises:
-            RuntimeError: If the bridge cannot be started (e.g. session missing).
+            RuntimeError: If the bridge cannot be started.
         """
         async with self._lock:
             bridge = self._bridges.get(session_name)
             if bridge is not None and bridge._running:
                 return bridge
 
-            bridge = TerminalBridge(session_name)
-            started = await bridge.start()
-            if not started:
-                raise RuntimeError(
-                    f"Could not attach to tmux session '{session_name}'"
-                )
+            # Check if this is a remote agent
+            from .agent_manager import AgentLocation
+            if (
+                agent is not None
+                and getattr(agent, "location", None) == AgentLocation.REMOTE
+                and remote_config is not None
+                and getattr(agent, "ttyd_port", None)
+            ):
+                vm_ip = remote_config.vm_ip
+                ws_url = f"ws://{vm_ip}:{agent.ttyd_port}/ws"
+                bridge = RemoteTerminalBridge(session_name, ws_url)
+                started = await bridge.start()
+                if not started:
+                    raise RuntimeError(
+                        f"Could not connect to remote ttyd for '{session_name}' at {ws_url}"
+                    )
+            else:
+                bridge = TerminalBridge(session_name)
+                started = await bridge.start()
+                if not started:
+                    raise RuntimeError(
+                        f"Could not attach to tmux session '{session_name}'"
+                    )
+
             self._bridges[session_name] = bridge
             return bridge
 

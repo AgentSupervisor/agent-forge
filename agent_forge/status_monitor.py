@@ -10,8 +10,10 @@ from typing import Any
 
 import aiosqlite
 
+import subprocess
+
 from . import tmux_utils
-from .agent_manager import AgentManager, AgentStatus
+from .agent_manager import AgentLocation, AgentManager, AgentStatus
 from .config import ForgeConfig
 from .connectors.base import ActionButton
 from .database import log_event, save_snapshot
@@ -116,70 +118,10 @@ class StatusMonitor:
             if agent.status == AgentStatus.STOPPED:
                 continue
 
-            # Resize legacy sessions that were created with default 80-column width
-            if agent.session_name not in self._resized_sessions:
-                tmux_utils.resize_window(agent.session_name)
-                self._resized_sessions.add(agent.session_name)
-
-            output = tmux_utils.capture_pane(agent.session_name, lines=5000)
-
-            if not tmux_utils.session_exists(agent.session_name):
-                old_status = agent.status
-                agent.status = AgentStatus.STOPPED
-                agent.needs_attention = True
-                agent.parked = False
-                if old_status != AgentStatus.STOPPED and self.db:
-                    await log_event(
-                        self.db, agent.id, agent.project_name,
-                        "status_change", {"status": AgentStatus.STOPPED.value},
-                    )
-                    if old_status == AgentStatus.WORKING:
-                        await self._relay_response(agent, output)
-                    msg = f"Agent `{agent.id}` ({agent.project_name}) stopped"
-                    summary = await self._get_activity_summary(
-                        agent.last_output or "",
-                    )
-                    if summary:
-                        msg += f"\n```\n{summary}\n```"
-                    await self._notify_channels(agent.project_name, msg)
+            if agent.location == AgentLocation.REMOTE:
+                await self._poll_remote_agent(agent)
             else:
-                new_status = self.detect_status(output, agent.last_output)
-                if new_status != agent.status:
-                    old_status = agent.status
-                    agent.status = new_status
-
-                    # Set attention flags based on status transitions
-                    if new_status in (AgentStatus.IDLE, AgentStatus.WAITING_INPUT, AgentStatus.ERROR):
-                        agent.needs_attention = True
-                        agent.parked = False
-                    elif new_status == AgentStatus.WORKING:
-                        agent.needs_attention = False
-
-                    if self.db:
-                        await log_event(
-                            self.db, agent.id, agent.project_name,
-                            "status_change", {"status": new_status.value},
-                        )
-                    if new_status == AgentStatus.WAITING_INPUT:
-                        await self._notify_waiting_input(
-                            agent.id, agent.project_name, output,
-                        )
-                    elif new_status != AgentStatus.WORKING:
-                        if new_status == AgentStatus.IDLE and old_status == AgentStatus.WORKING:
-                            await self._relay_response(agent, output)
-                        else:
-                            msg = f"Agent `{agent.id}` ({agent.project_name}): {old_status.value} -> {new_status.value}"
-                            summary = await self._get_activity_summary(output)
-                            if summary:
-                                msg += f"\n```\n{summary}\n```"
-                            await self._notify_channels(agent.project_name, msg)
-
-            agent.last_output = output
-
-            if self.db:
-                await save_snapshot(self.db, agent)
-
-            await self.ws_manager.broadcast_agent_update(agent)
+                await self._poll_local_agent(agent)
 
         # Collect and broadcast metrics at configured interval
         if self.metrics_collector:
@@ -203,6 +145,183 @@ class StatusMonitor:
                 except Exception:
                     logger.exception("Claude usage collection failed")
                 self._last_claude_usage_collect = now_cu
+
+    async def _poll_local_agent(self, agent) -> None:
+        """Poll a local tmux-based agent for status changes."""
+        # Resize legacy sessions that were created with default 80-column width
+        if agent.session_name not in self._resized_sessions:
+            tmux_utils.resize_window(agent.session_name)
+            self._resized_sessions.add(agent.session_name)
+
+        output = tmux_utils.capture_pane(agent.session_name, lines=5000)
+
+        if not tmux_utils.session_exists(agent.session_name):
+            old_status = agent.status
+            agent.status = AgentStatus.STOPPED
+            agent.needs_attention = True
+            agent.parked = False
+            if old_status != AgentStatus.STOPPED and self.db:
+                await log_event(
+                    self.db, agent.id, agent.project_name,
+                    "status_change", {"status": AgentStatus.STOPPED.value},
+                )
+                if old_status == AgentStatus.WORKING:
+                    await self._relay_response(agent, output)
+                msg = f"Agent `{agent.id}` ({agent.project_name}) stopped"
+                summary = await self._get_activity_summary(
+                    agent.last_output or "",
+                )
+                if summary:
+                    msg += f"\n```\n{summary}\n```"
+                await self._notify_channels(agent.project_name, msg)
+        else:
+            new_status = self.detect_status(output, agent.last_output)
+            if new_status != agent.status:
+                old_status = agent.status
+                agent.status = new_status
+
+                # Set attention flags based on status transitions
+                if new_status in (AgentStatus.IDLE, AgentStatus.WAITING_INPUT, AgentStatus.ERROR):
+                    agent.needs_attention = True
+                    agent.parked = False
+                elif new_status == AgentStatus.WORKING:
+                    agent.needs_attention = False
+
+                if self.db:
+                    await log_event(
+                        self.db, agent.id, agent.project_name,
+                        "status_change", {"status": new_status.value},
+                    )
+                if new_status == AgentStatus.WAITING_INPUT:
+                    await self._notify_waiting_input(
+                        agent.id, agent.project_name, output,
+                    )
+                elif new_status != AgentStatus.WORKING:
+                    if new_status == AgentStatus.IDLE and old_status == AgentStatus.WORKING:
+                        await self._relay_response(agent, output)
+                    else:
+                        msg = f"Agent `{agent.id}` ({agent.project_name}): {old_status.value} -> {new_status.value}"
+                        summary = await self._get_activity_summary(output)
+                        if summary:
+                            msg += f"\n```\n{summary}\n```"
+                        await self._notify_channels(agent.project_name, msg)
+
+        agent.last_output = output
+
+        if self.db:
+            await save_snapshot(self.db, agent)
+
+        await self.ws_manager.broadcast_agent_update(agent)
+
+    async def _poll_remote_agent(self, agent) -> None:
+        """Poll a remote Swarm service for status."""
+        remote_cfg = self.agent_manager.registry.config.remote
+        if not remote_cfg or not agent.remote_service:
+            return
+
+        # Check service state
+        try:
+            state_result = subprocess.run(
+                ["docker", "--context", remote_cfg.docker_context,
+                 "service", "ps", agent.remote_service,
+                 "--format", "{{.CurrentState}}", "--no-trunc"],
+                capture_output=True, text=True, timeout=10,
+            )
+            state_line = (
+                state_result.stdout.strip().splitlines()[0]
+                if state_result.stdout.strip() else ""
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return
+
+        if "Complete" in state_line:
+            if agent.status != AgentStatus.STOPPED:
+                old_status = agent.status
+                agent.status = AgentStatus.STOPPED
+                agent.needs_attention = True
+                if old_status == AgentStatus.WORKING:
+                    await self._relay_response(agent, agent.last_output)
+                msg = f"Agent `{agent.id}` ({agent.project_name}) completed on Swarm"
+                await self._notify_channels(agent.project_name, msg)
+                if self.db:
+                    await log_event(
+                        self.db, agent.id, agent.project_name,
+                        "status_change", {"status": AgentStatus.STOPPED.value},
+                    )
+                # Schedule cleanup
+                asyncio.create_task(self._schedule_remote_cleanup(agent))
+            if self.db:
+                await save_snapshot(self.db, agent)
+            await self.ws_manager.broadcast_agent_update(agent)
+            return
+
+        if "Failed" in state_line:
+            if agent.status != AgentStatus.ERROR:
+                agent.status = AgentStatus.ERROR
+                agent.needs_attention = True
+                msg = f"Agent `{agent.id}` ({agent.project_name}) FAILED on Swarm"
+                await self._notify_channels(agent.project_name, msg)
+                if self.db:
+                    await log_event(
+                        self.db, agent.id, agent.project_name,
+                        "status_change", {"status": AgentStatus.ERROR.value},
+                    )
+            if self.db:
+                await save_snapshot(self.db, agent)
+            await self.ws_manager.broadcast_agent_update(agent)
+            return
+
+        # Fetch log tail for output-based status detection
+        try:
+            log_result = subprocess.run(
+                ["docker", "--context", remote_cfg.docker_context,
+                 "service", "logs", agent.remote_service,
+                 "--tail", "100", "--no-trunc"],
+                capture_output=True, text=True, timeout=15,
+            )
+            output = log_result.stdout
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            output = ""
+
+        if output:
+            new_status = self.detect_status(output, agent.last_output)
+            if new_status != agent.status:
+                old_status = agent.status
+                agent.status = new_status
+                if new_status in (AgentStatus.IDLE, AgentStatus.WAITING_INPUT, AgentStatus.ERROR):
+                    agent.needs_attention = True
+                elif new_status == AgentStatus.WORKING:
+                    agent.needs_attention = False
+                if new_status == AgentStatus.WAITING_INPUT:
+                    await self._notify_waiting_input(agent.id, agent.project_name, output)
+                elif new_status == AgentStatus.IDLE and old_status == AgentStatus.WORKING:
+                    await self._relay_response(agent, output)
+                if self.db:
+                    await log_event(
+                        self.db, agent.id, agent.project_name,
+                        "status_change", {"status": new_status.value},
+                    )
+
+        agent.last_output = output
+        if self.db:
+            await save_snapshot(self.db, agent)
+        await self.ws_manager.broadcast_agent_update(agent)
+
+    async def _schedule_remote_cleanup(self, agent) -> None:
+        """Auto-remove a completed remote service after the configured window."""
+        remote_cfg = self.agent_manager.registry.config.remote
+        if not remote_cfg:
+            return
+        await asyncio.sleep(remote_cfg.cleanup_after_hours * 3600)
+        try:
+            subprocess.run(
+                ["docker", "--context", remote_cfg.docker_context,
+                 "service", "rm", agent.remote_service],
+                capture_output=True, timeout=10,
+            )
+            logger.info("Auto-cleaned remote service %s", agent.remote_service)
+        except Exception:
+            logger.debug("Failed to auto-clean remote service %s", agent.remote_service)
 
     async def _notify_channels(
         self, project_name: str, text: str, media_paths: list[str] | None = None

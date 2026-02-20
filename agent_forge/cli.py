@@ -565,6 +565,234 @@ def cmd_remote_validate(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# forge remote scan
+# ---------------------------------------------------------------------------
+
+MANIFEST_PATH = str(ROOT_DIR / ".forge" / "toolchain-manifest.yaml")
+
+
+def cmd_remote_scan(args: argparse.Namespace) -> None:
+    """Scan projects for toolchains and produce a manifest."""
+    from .registry import ProjectRegistry
+    from .remote_scanner import save_manifest, scan_all_projects
+
+    config_path = Path(args.config)
+    if not config_path.exists():
+        print(f"Config not found: {config_path}")
+        sys.exit(1)
+
+    registry = ProjectRegistry(config_path=str(config_path))
+
+    no_local = getattr(args, "no_local", False)
+    manifest = scan_all_projects(
+        registry.config,
+        include_local_utils=not no_local,
+    )
+
+    # Report
+    remote_projects = [
+        p for p in manifest["scanned_projects"] if not p.get("skipped")
+    ]
+    skipped_projects = [
+        p for p in manifest["scanned_projects"] if p.get("skipped")
+    ]
+
+    print(f"Scanned {len(remote_projects)} remote project(s), "
+          f"skipped {len(skipped_projects)} local project(s).\n")
+
+    for p in remote_projects:
+        markers = ", ".join(p.get("markers", [])) or "(none)"
+        print(f"  {p['name']}: {markers}")
+
+    if manifest["toolchains"]:
+        print(f"\nDetected toolchains: "
+              f"{', '.join(t['name'] for t in manifest['toolchains'])}")
+
+    if manifest["utilities"]:
+        print(f"Detected utilities: "
+              f"{', '.join(u['name'] for u in manifest['utilities'])}")
+
+    dry_run = getattr(args, "dry_run", False)
+    if dry_run:
+        print("\nDry run — manifest not written.")
+        import yaml as _yaml
+        print("\n--- manifest preview ---")
+        print(_yaml.dump(manifest, default_flow_style=False, sort_keys=False))
+    else:
+        save_manifest(manifest, MANIFEST_PATH)
+        print(f"\nManifest written to {MANIFEST_PATH}")
+
+
+# ---------------------------------------------------------------------------
+# forge remote build-image
+# ---------------------------------------------------------------------------
+
+def cmd_remote_build_image(args: argparse.Namespace) -> None:
+    """Build Docker image from toolchain manifest."""
+    from .registry import ProjectRegistry
+    from .remote_image_builder import build_image
+    from .remote_scanner import save_manifest, scan_all_projects
+
+    config_path = Path(args.config)
+    if not config_path.exists():
+        print(f"Config not found: {config_path}")
+        sys.exit(1)
+
+    registry = ProjectRegistry(config_path=str(config_path))
+    remote = registry.config.remote
+
+    if remote is None:
+        print("No remote config found in config.yaml.")
+        sys.exit(1)
+
+    # Optionally scan first
+    if getattr(args, "scan", False):
+        print("Scanning projects...\n")
+        manifest = scan_all_projects(registry.config)
+        save_manifest(manifest, MANIFEST_PATH)
+        print(f"Manifest written to {MANIFEST_PATH}\n")
+
+    no_push = getattr(args, "no_push", False)
+    no_cache = getattr(args, "no_cache", False)
+
+    success = build_image(
+        manifest_path=MANIFEST_PATH,
+        remote_config=remote,
+        no_push=no_push,
+        no_cache=no_cache,
+    )
+    if not success:
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# forge remote cleanup
+# ---------------------------------------------------------------------------
+
+def cmd_remote_cleanup(args: argparse.Namespace) -> None:
+    """Remove completed / failed Swarm services labelled forge=agent."""
+    from .registry import ProjectRegistry
+
+    config_path = Path(args.config)
+    if not config_path.exists():
+        print(f"Config not found: {config_path}")
+        sys.exit(1)
+
+    registry = ProjectRegistry(config_path=str(config_path))
+    remote = registry.config.remote
+    if remote is None:
+        print("No remote config found.")
+        sys.exit(1)
+
+    dry_run = getattr(args, "dry_run", False)
+
+    # List all forge-labelled services
+    try:
+        result = subprocess.run(
+            ["docker", "--context", remote.docker_context,
+             "service", "ls", "--filter", "label=forge=agent",
+             "--format", "{{.ID}}\t{{.Name}}\t{{.Replicas}}"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        print(f"Failed to list services: {exc}")
+        sys.exit(1)
+
+    if result.returncode != 0:
+        print(f"Docker error: {result.stderr.strip()}")
+        sys.exit(1)
+
+    removed = 0
+    for line in result.stdout.strip().splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        svc_name = parts[1] if len(parts) > 1 else parts[0]
+        replicas = parts[2] if len(parts) > 2 else ""
+
+        # Check if completed (0/0 or 1/1 (completed)) via service ps
+        try:
+            state_result = subprocess.run(
+                ["docker", "--context", remote.docker_context,
+                 "service", "ps", svc_name,
+                 "--format", "{{.CurrentState}}", "--no-trunc"],
+                capture_output=True, text=True, timeout=10,
+            )
+            state_line = state_result.stdout.strip().splitlines()[0] if state_result.stdout.strip() else ""
+        except Exception:
+            state_line = ""
+
+        if "Complete" in state_line or "Failed" in state_line:
+            if dry_run:
+                print(f"  Would remove: {svc_name} ({state_line.split()[0]})")
+            else:
+                subprocess.run(
+                    ["docker", "--context", remote.docker_context,
+                     "service", "rm", svc_name],
+                    capture_output=True, timeout=10,
+                )
+                print(f"  Removed: {svc_name}")
+            removed += 1
+
+    if removed == 0:
+        print("No completed or failed services to clean up.")
+    elif dry_run:
+        print(f"\n{removed} service(s) would be removed. Run without --dry-run to proceed.")
+    else:
+        print(f"\nRemoved {removed} service(s).")
+
+
+# ---------------------------------------------------------------------------
+# forge remote status
+# ---------------------------------------------------------------------------
+
+def cmd_remote_status(args: argparse.Namespace) -> None:
+    """Show running Swarm services for forge agents."""
+    from .registry import ProjectRegistry
+
+    config_path = Path(args.config)
+    if not config_path.exists():
+        print(f"Config not found: {config_path}")
+        sys.exit(1)
+
+    registry = ProjectRegistry(config_path=str(config_path))
+    remote = registry.config.remote
+    if remote is None:
+        print("No remote config found.")
+        sys.exit(1)
+
+    try:
+        result = subprocess.run(
+            ["docker", "--context", remote.docker_context,
+             "service", "ls", "--filter", "label=forge=agent",
+             "--format", "{{.Name}}\t{{.Replicas}}\t{{.Image}}"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        print(f"Failed to list services: {exc}")
+        sys.exit(1)
+
+    if result.returncode != 0:
+        print(f"Docker error: {result.stderr.strip()}")
+        sys.exit(1)
+
+    lines = [l for l in result.stdout.strip().splitlines() if l.strip()]
+    if not lines:
+        print("No forge agent services running on Swarm.")
+        return
+
+    print(f"{'SERVICE':<40} {'REPLICAS':<12} {'IMAGE'}")
+    print("-" * 80)
+    for line in lines:
+        parts = line.split("\t")
+        name = parts[0] if len(parts) > 0 else ""
+        replicas = parts[1] if len(parts) > 1 else ""
+        image = parts[2] if len(parts) > 2 else ""
+        print(f"{name:<40} {replicas:<12} {image}")
+    print(f"\n{len(lines)} service(s) total.")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -610,6 +838,26 @@ def main() -> None:
     remote_sub = p_remote.add_subparsers(dest="remote_command")
     remote_sub.add_parser("validate", help="Validate remote execution config")
 
+    p_scan = remote_sub.add_parser("scan", help="Scan projects for toolchains")
+    p_scan.add_argument("--dry-run", action="store_true", dest="dry_run",
+                        help="Preview manifest without writing")
+    p_scan.add_argument("--no-local", action="store_true", dest="no_local",
+                        help="Skip local utility detection")
+
+    p_build = remote_sub.add_parser("build-image", help="Build Docker image from manifest")
+    p_build.add_argument("--scan", action="store_true",
+                         help="Run scan before building")
+    p_build.add_argument("--no-push", action="store_true", dest="no_push",
+                         help="Build locally only, skip push")
+    p_build.add_argument("--no-cache", action="store_true", dest="no_cache",
+                         help="Bypass Docker layer cache")
+
+    p_cleanup = remote_sub.add_parser("cleanup", help="Remove completed/failed Swarm services")
+    p_cleanup.add_argument("--dry-run", action="store_true", dest="dry_run",
+                           help="Show what would be removed without removing")
+
+    remote_sub.add_parser("status", help="Show running forge agent services on Swarm")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -622,6 +870,10 @@ def main() -> None:
             sys.exit(0)
         remote_commands = {
             "validate": cmd_remote_validate,
+            "scan": cmd_remote_scan,
+            "build-image": cmd_remote_build_image,
+            "cleanup": cmd_remote_cleanup,
+            "status": cmd_remote_status,
         }
         remote_commands[args.remote_command](args)
         return

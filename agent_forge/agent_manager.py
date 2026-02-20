@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
+import socket
 import subprocess
 import uuid
 from dataclasses import dataclass, field
@@ -30,6 +32,11 @@ class AgentStatus(str, Enum):
     ERROR = "error"
 
 
+class AgentLocation(str, Enum):
+    LOCAL = "local"
+    REMOTE = "remote"
+
+
 @dataclass
 class Agent:
     id: str
@@ -50,6 +57,10 @@ class Agent:
     last_relay_offset: int = 0
     last_response: str = ""
     last_user_message: str = ""
+    # ── Remote execution (None for local agents) ──
+    location: AgentLocation = AgentLocation.LOCAL
+    remote_service: str | None = None
+    ttyd_port: int | None = None
 
 
 def _sanitize_for_branch(text: str) -> str:
@@ -294,6 +305,25 @@ class AgentManager:
         """Spawn a new Claude Code agent for a project."""
         project = self.registry.get_project(project_name)
         config = self.registry.config
+
+        # Decide execution location from project config
+        execution = getattr(project, "execution", "local")
+        remote_cfg = config.remote
+
+        if execution == "remote" and remote_cfg:
+            return await self._spawn_remote(project_name, task, branch_prefix, profile)
+        return await self._spawn_local(project_name, task, branch_prefix, profile)
+
+    async def _spawn_local(
+        self,
+        project_name: str,
+        task: str = "",
+        branch_prefix: str = "agent",
+        profile: str = "",
+    ) -> Agent:
+        """Spawn a local agent via tmux + git worktree (existing logic)."""
+        project = self.registry.get_project(project_name)
+        config = self.registry.config
         max_agents = config.get_max_agents(project_name)
 
         current_count = len(
@@ -383,6 +413,7 @@ class AgentManager:
             task_description=task,
             profile=profile,
             output_log_path=str(output_log),
+            location=AgentLocation.LOCAL,
         )
         self.agents[short_id] = agent
 
@@ -395,6 +426,109 @@ class AgentManager:
             project_name,
             branch_name,
             profile or "none",
+        )
+        return agent
+
+    async def _spawn_remote(
+        self,
+        project_name: str,
+        task: str = "",
+        branch_prefix: str = "agent",
+        profile: str = "",
+    ) -> Agent:
+        """Spawn a replicated-job on the Docker Swarm."""
+        config = self.registry.config
+        project = self.registry.get_project(project_name)
+        remote_cfg = config.remote
+
+        max_agents = config.get_max_agents(project_name)
+        current_count = len(
+            [a for a in self.agents.values() if a.project_name == project_name]
+        )
+        if current_count >= max_agents:
+            raise RuntimeError(
+                f"Agent limit reached for '{project_name}': {current_count}/{max_agents}"
+            )
+
+        profile_obj: AgentProfile | None = None
+        if profile:
+            profile_obj = config.get_profile(profile)
+            if not profile_obj:
+                raise ValueError(f"Profile not found: '{profile}'")
+
+        short_id = uuid.uuid4().hex[:6]
+        task_slug = _sanitize_for_branch(task) if task else "task"
+        branch_name = f"{branch_prefix}/{short_id}/{task_slug}"
+        session_name = f"forge__{project_name}__{short_id}"
+
+        # Build claude command
+        claude_cmd = config.defaults.claude_command
+        if profile_obj and profile_obj.system_prompt.strip():
+            escaped = profile_obj.system_prompt.strip().replace("'", "'\\''")
+            claude_cmd = f"{claude_cmd} --append-system-prompt '{escaped}'"
+
+        # Read secrets from local environment
+        oauth_token = self._read_oauth_token()
+        github_token = self._require_env("GITHUB_TOKEN")
+        ssh_key = self._read_file(Path.home() / ".ssh" / "id_rsa")
+        ttyd_pass = self._require_env(remote_cfg.ttyd_pass_env)
+
+        repo_url = self._get_repo_url(project.path)
+
+        cmd = [
+            "docker", "--context", remote_cfg.docker_context,
+            "service", "create",
+            "--name", session_name,
+            "--mode", "replicated-job",
+            "--restart-condition", "none",
+            "--limit-cpu", remote_cfg.cpu_limit,
+            "--limit-memory", remote_cfg.memory_limit,
+            "--env", f"CLAUDE_CODE_OAUTH_TOKEN={oauth_token}",
+            "--env", f"GITHUB_TOKEN={github_token}",
+            "--env", f"SSH_PRIVATE_KEY={ssh_key}",
+            "--env", f"TTYD_PASS={ttyd_pass}",
+            "--env", f"TTYD_USER={remote_cfg.ttyd_user}",
+            "--env", f"FORGE_AGENT_ID={short_id}",
+            "--env", f"FORGE_PROJECT={project_name}",
+            "--env", f"FORGE_SERVER=http://{self._local_ip()}:{config.server.port}",
+            "--env", f"REPO_URL={repo_url}",
+            "--env", f"DEFAULT_BRANCH={project.default_branch}",
+            "--env", f"BRANCH={branch_name}",
+            "--env", f"TASK_PROMPT={task}",
+            "--env", f"CONFIG_REPO_URL={remote_cfg.config_repo}",
+            "--env", f"CLAUDE_CMD={claude_cmd}",
+            "--env", f"CLAUDE_ENV_JSON={json.dumps(config.defaults.claude_env)}",
+            "--publish", "published=0,target=7681,protocol=tcp",
+            "--label", "forge=agent",
+            "--label", f"forge.project={project_name}",
+            "--label", f"forge.agent_id={short_id}",
+            remote_cfg.image,
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to create Swarm service: {result.stderr.strip()}")
+
+        ttyd_port = await self._get_remote_ttyd_port(session_name, remote_cfg)
+
+        agent = Agent(
+            id=short_id,
+            project_name=project_name,
+            session_name=session_name,
+            worktree_path="",
+            branch_name=branch_name,
+            task_description=task,
+            profile=profile,
+            location=AgentLocation.REMOTE,
+            remote_service=session_name,
+            ttyd_port=ttyd_port,
+        )
+        self.agents[short_id] = agent
+
+        logger.info(
+            "Spawned remote agent %s for project '%s' on branch '%s' "
+            "(service=%s, ttyd_port=%s)",
+            short_id, project_name, branch_name, session_name, ttyd_port,
         )
         return agent
 
@@ -433,12 +567,18 @@ class AgentManager:
         return agents
 
     async def kill_agent(self, agent_id: str) -> bool:
-        """Kill an agent and clean up worktree, branch, and session."""
+        """Kill an agent and clean up resources."""
         agent = self.agents.get(agent_id)
         if not agent:
             logger.warning("Agent not found: %s", agent_id)
             return False
 
+        if agent.location == AgentLocation.REMOTE:
+            return await self._kill_remote(agent)
+        return await self._kill_local(agent)
+
+    async def _kill_local(self, agent: Agent) -> bool:
+        """Kill a local agent and clean up worktree, branch, and session."""
         project = self.registry.get_project(agent.project_name)
         project_path = Path(project.path)
 
@@ -473,7 +613,7 @@ class AgentManager:
         if result.returncode != 0:
             logger.warning(
                 "git worktree remove failed for %s: %s",
-                agent_id,
+                agent.id,
                 result.stderr.strip(),
             )
             # Fallback: remove directory and prune stale worktree entries
@@ -501,10 +641,32 @@ class AgentManager:
             timeout=10,
         )
 
-        del self.agents[agent_id]
+        del self.agents[agent.id]
         agent.status = AgentStatus.STOPPED
 
-        logger.info("Killed agent %s (project '%s')", agent_id, agent.project_name)
+        logger.info("Killed agent %s (project '%s')", agent.id, agent.project_name)
+        return True
+
+    async def _kill_remote(self, agent: Agent) -> bool:
+        """Remove the Swarm service for a remote agent."""
+        remote_cfg = self.registry.config.remote
+        if not remote_cfg or not agent.remote_service:
+            return False
+
+        result = subprocess.run(
+            ["docker", "--context", remote_cfg.docker_context,
+             "service", "rm", agent.remote_service],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            logger.warning(
+                "Failed to remove Swarm service %s: %s",
+                agent.remote_service, result.stderr.strip(),
+            )
+
+        del self.agents[agent.id]
+        agent.status = AgentStatus.STOPPED
+        logger.info("Killed remote agent %s (service=%s)", agent.id, agent.remote_service)
         return True
 
     async def restart_agent(self, agent_id: str) -> "Agent":
@@ -542,7 +704,11 @@ class AgentManager:
             logger.warning("Agent not found: %s", agent_id)
             return False
 
-        success = tmux_utils.send_keys(agent.session_name, message)
+        if agent.location == AgentLocation.REMOTE:
+            success = await self._send_to_remote_agent(agent, message)
+        else:
+            success = tmux_utils.send_keys(agent.session_name, message)
+
         if success:
             agent.last_activity = datetime.now()
             logger.info(
@@ -606,11 +772,144 @@ class AgentManager:
             logger.warning("Unknown control action: %s", action)
             return False
 
-        success = tmux_utils.send_raw(agent.session_name, *keys)
+        if agent.location == AgentLocation.REMOTE:
+            # For remote agents, map control actions to tmux send-keys via docker exec
+            key_str = " ".join(keys)
+            success = await self._send_control_to_remote_agent(agent, key_str)
+        else:
+            success = tmux_utils.send_raw(agent.session_name, *keys)
+
         if success:
             agent.last_activity = datetime.now()
             logger.info("Sent control '%s' to agent %s", action, agent_id)
         return success
+
+    # ------------------------------------------------------------------
+    # Remote helpers
+    # ------------------------------------------------------------------
+
+    async def _get_remote_ttyd_port(
+        self, service_name: str, remote_cfg, retries: int = 15,
+    ) -> int | None:
+        """Poll until the Swarm assigns a published host port to the service."""
+        for _ in range(retries):
+            result = subprocess.run(
+                ["docker", "--context", remote_cfg.docker_context,
+                 "service", "inspect", service_name,
+                 "--format", "{{(index .Endpoint.Ports 0).PublishedPort}}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            port_str = result.stdout.strip()
+            if port_str and port_str not in ("0", "<no value>"):
+                try:
+                    return int(port_str)
+                except ValueError:
+                    pass
+            await asyncio.sleep(1)
+        return None
+
+    async def _send_to_remote_agent(self, agent: Agent, message: str) -> bool:
+        """Send a message to a remote agent via docker exec."""
+        remote_cfg = self.registry.config.remote
+        if not remote_cfg or not agent.remote_service:
+            return False
+
+        task_id = self._get_remote_task_id(agent, remote_cfg)
+        if not task_id:
+            return False
+
+        escaped = message.replace("'", "'\\''")
+        result = subprocess.run(
+            ["docker", "--context", remote_cfg.docker_context,
+             "exec", task_id,
+             "tmux", "send-keys", "-t", agent.session_name, "-l", escaped],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            # Send Enter to submit
+            subprocess.run(
+                ["docker", "--context", remote_cfg.docker_context,
+                 "exec", task_id,
+                 "tmux", "send-keys", "-t", agent.session_name, "Enter"],
+                capture_output=True, text=True, timeout=10,
+            )
+        return result.returncode == 0
+
+    async def _send_control_to_remote_agent(self, agent: Agent, keys: str) -> bool:
+        """Send tmux control keys to a remote agent via docker exec."""
+        remote_cfg = self.registry.config.remote
+        if not remote_cfg or not agent.remote_service:
+            return False
+
+        task_id = self._get_remote_task_id(agent, remote_cfg)
+        if not task_id:
+            return False
+
+        for key in keys.split():
+            subprocess.run(
+                ["docker", "--context", remote_cfg.docker_context,
+                 "exec", task_id,
+                 "tmux", "send-keys", "-t", agent.session_name, key],
+                capture_output=True, text=True, timeout=10,
+            )
+        return True
+
+    def _get_remote_task_id(self, agent: Agent, remote_cfg) -> str:
+        """Get the container/task ID for a running remote agent service."""
+        inspect = subprocess.run(
+            ["docker", "--context", remote_cfg.docker_context,
+             "service", "ps", agent.remote_service,
+             "--filter", "desired-state=running",
+             "--format", "{{.ID}}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        lines = inspect.stdout.strip().splitlines()
+        return lines[0] if lines else ""
+
+    def _read_oauth_token(self) -> str:
+        """Read Claude OAuth token from env or credentials file."""
+        token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
+        if token:
+            return token
+        cred_path = Path.home() / ".claude" / ".credentials.json"
+        if cred_path.exists():
+            creds = json.loads(cred_path.read_text())
+            return creds.get("claudeAiOauth", {}).get("token", "")
+        raise RuntimeError("No Claude OAuth token. Set CLAUDE_CODE_OAUTH_TOKEN or run 'claude setup-token'.")
+
+    def _require_env(self, name: str) -> str:
+        """Read a required env var or raise."""
+        value = os.getenv(name)
+        if not value:
+            raise RuntimeError(f"Required env var {name!r} is not set.")
+        return value
+
+    def _read_file(self, path: Path) -> str:
+        """Read a file's contents or raise."""
+        if not path.exists():
+            raise RuntimeError(f"File not found: {path}")
+        return path.read_text()
+
+    def _get_repo_url(self, project_path: str) -> str:
+        """Get the remote origin URL for the project."""
+        result = subprocess.run(
+            ["git", "-C", project_path, "remote", "get-url", "origin"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"No git remote 'origin' in {project_path}")
+        return result.stdout.strip()
+
+    def _local_ip(self) -> str:
+        """Best-effort: get the Mac's LAN IP so containers can reach FORGE_SERVER."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
 
     def get_agent(self, agent_id: str) -> Agent | None:
         return self.agents.get(agent_id)
@@ -712,15 +1011,59 @@ class AgentManager:
             self.agents[short_id] = agent
             recovered += 1
 
-        # --- Power failure recovery ---
+        # --- Remote agent recovery ---
+        # Recover remote agents from snapshots (no local tmux session to find)
+        for agent_id, snap in snapshots.items():
+            if agent_id in self.agents:
+                continue
+            if snap.get("location") != AgentLocation.REMOTE.value:
+                continue
+            if snap.get("status") == AgentStatus.STOPPED.value:
+                continue
+
+            project_name = snap.get("project_name", "")
+            try:
+                self.registry.get_project(project_name)
+            except KeyError:
+                continue
+
+            agent = Agent(
+                id=agent_id,
+                project_name=project_name,
+                session_name=snap.get("session_name", f"forge__{project_name}__{agent_id}"),
+                worktree_path="",
+                branch_name=snap.get("branch_name", f"agent/{agent_id}/recovered"),
+                status=AgentStatus(snap.get("status", AgentStatus.STARTING.value)),
+                task_description=snap.get("task_description", ""),
+                profile=snap.get("profile", ""),
+                needs_attention=True,
+                location=AgentLocation.REMOTE,
+                remote_service=snap.get("remote_service", snap.get("session_name", "")),
+                ttyd_port=snap.get("ttyd_port"),
+            )
+            if snap.get("created_at"):
+                try:
+                    agent.created_at = datetime.fromisoformat(snap["created_at"])
+                except (ValueError, TypeError):
+                    pass
+
+            self.agents[agent_id] = agent
+            recovered += 1
+            logger.info("Recovered remote agent %s from snapshot", agent_id)
+
+        # --- Power failure recovery (local agents only) ---
         # Check for snapshots with no matching tmux session but worktree still on disk
         recovered_ids = set(self.agents.keys())  # Already recovered above
         for agent_id, snap in snapshots.items():
             if agent_id in recovered_ids:
-                continue  # Already recovered via tmux session
+                continue  # Already recovered via tmux session or remote recovery
 
             # Don't revive agents that were intentionally stopped
             if snap.get("status") == AgentStatus.STOPPED.value:
+                continue
+
+            # Skip remote agents (already handled above)
+            if snap.get("location") == AgentLocation.REMOTE.value:
                 continue
 
             project_name = snap.get("project_name", "")
@@ -782,6 +1125,7 @@ class AgentManager:
                 last_response=snap.get("last_response", ""),
                 last_user_message=snap.get("last_user_message", ""),
                 output_log_path=str(output_log),
+                location=AgentLocation.LOCAL,
             )
             # Restore created_at from snapshot if available
             if snap.get("created_at"):

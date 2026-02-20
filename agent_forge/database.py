@@ -68,6 +68,9 @@ async def _migrate_add_columns(db: aiosqlite.Connection) -> None:
         ("last_response", "TEXT"),
         ("last_user_message", "TEXT"),
         ("profile", "TEXT"),
+        ("location", "TEXT DEFAULT 'local'"),
+        ("remote_service", "TEXT"),
+        ("ttyd_port", "INTEGER"),
     ]
     for col_name, col_def in migrations:
         if col_name not in existing:
@@ -139,8 +142,9 @@ async def save_snapshot(db: aiosqlite.Connection, agent: Agent) -> None:
         """INSERT OR REPLACE INTO agent_snapshots
            (agent_id, project_name, session_name, worktree_path, branch_name,
             status, task_description, created_at, last_activity, last_output,
-            needs_attention, parked, last_response, last_user_message, profile)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            needs_attention, parked, last_response, last_user_message, profile,
+            location, remote_service, ttyd_port)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             agent.id,
             agent.project_name,
@@ -157,6 +161,9 @@ async def save_snapshot(db: aiosqlite.Connection, agent: Agent) -> None:
             agent.last_response[-5000:] if agent.last_response else "",
             agent.last_user_message[-2000:] if agent.last_user_message else "",
             agent.profile,
+            agent.location.value,
+            agent.remote_service,
+            agent.ttyd_port,
         ),
     )
     await db.commit()

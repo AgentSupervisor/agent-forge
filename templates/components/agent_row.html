@@ -11,6 +11,9 @@
     </td>
     <td class="px-4 py-3">
         <a href="/agent/{{ agent.id }}" class="text-indigo-400 hover:text-indigo-300 text-sm font-mono">{{ agent.id }}</a>
+        {% if agent.location.value == 'remote' %}
+        <span class="ml-1 inline-flex items-center rounded px-1 py-0.5 text-[10px] font-semibold bg-purple-600/20 text-purple-400 border border-purple-500/30">REMOTE</span>
+        {% endif %}
     </td>
     <td class="px-4 py-3 text-sm text-gray-300">{{ agent.project_name }}</td>
     <td class="px-4 py-3 text-sm text-gray-400 font-mono truncate max-w-[160px]" title="{{ agent.branch_name }}">{{ agent.branch_name }}</td>

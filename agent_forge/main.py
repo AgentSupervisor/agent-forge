@@ -216,6 +216,9 @@ def _agent_to_dict(agent) -> dict:
         "profile": agent.profile,
         "needs_attention": agent.needs_attention,
         "parked": agent.parked,
+        "location": agent.location.value,
+        "remote_service": agent.remote_service,
+        "ttyd_port": agent.ttyd_port,
     }
 
 
@@ -248,11 +251,22 @@ async def dashboard(request: Request):
 @app.get("/agent/{agent_id}", response_class=HTMLResponse)
 async def agent_detail(request: Request, agent_id: str):
     mgr: AgentManager = request.app.state.agent_manager
+    config: ForgeConfig = request.app.state.config
     agent = mgr.get_agent(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+    from .agent_manager import AgentLocation
     from . import tmux_utils
-    terminal_output = tmux_utils.capture_pane(agent.session_name, lines=5000)
+    if agent.location == AgentLocation.REMOTE:
+        terminal_output = ""
+    else:
+        terminal_output = tmux_utils.capture_pane(agent.session_name, lines=5000)
+
+    # Build ttyd direct URL for remote agents
+    ttyd_url = ""
+    if agent.location == AgentLocation.REMOTE and config.remote and agent.ttyd_port:
+        ttyd_url = f"http://{config.remote.vm_ip}:{agent.ttyd_port}"
+
     return templates.TemplateResponse(
         "agent_detail.html",
         {
@@ -260,6 +274,8 @@ async def agent_detail(request: Request, agent_id: str):
             "agent": agent,
             "terminal_output": terminal_output,
             "total_agents": len(mgr.list_agents()),
+            "ttyd_url": ttyd_url,
+            "remote_config": config.remote,
         },
     )
 
@@ -1367,9 +1383,12 @@ async def websocket_terminal(websocket: WebSocket, agent_id: str):
         await websocket.close(code=4004, reason="Agent not found")
         return
 
+    config: ForgeConfig = websocket.app.state.config
     bridge_mgr: TerminalBridgeManager = websocket.app.state.terminal_bridges
     try:
-        bridge = await bridge_mgr.get_or_create(agent.session_name)
+        bridge = await bridge_mgr.get_or_create(
+            agent.session_name, agent=agent, remote_config=config.remote,
+        )
     except Exception as exc:
         logger.error("Failed to create terminal bridge for %s: %s", agent_id, exc)
         await websocket.close(code=4500, reason="Bridge creation failed")

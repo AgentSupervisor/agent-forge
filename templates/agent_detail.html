@@ -49,6 +49,16 @@
                     <span style="font-family:monospace; font-size:11px;">{{ agent.session_name }}</span>
                 </div>
                 <div style="display:flex; justify-content:space-between;">
+                    <span style="color:var(--text-muted);">Location</span>
+                    <span>{% if agent.location.value == 'remote' %}<span style="color:#a78bfa; font-weight:600;">REMOTE</span>{% else %}local{% endif %}</span>
+                </div>
+                {% if ttyd_url %}
+                <div style="display:flex; justify-content:space-between;">
+                    <span style="color:var(--text-muted);">ttyd</span>
+                    <a href="{{ ttyd_url }}" target="_blank" style="color:#60a5fa; font-size:11px;">Open direct</a>
+                </div>
+                {% endif %}
+                <div style="display:flex; justify-content:space-between;">
                     <span style="color:var(--text-muted);">Sub-agents</span>
                     <span id="detail-sub-count">{{ agent.sub_agent_count }}</span>
                 </div>

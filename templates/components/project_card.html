@@ -1,6 +1,11 @@
 <div class="bg-gray-800 rounded-lg border border-gray-700 p-5 hover:border-gray-600 transition">
     <div class="flex items-start justify-between mb-2">
-        <h3 class="text-base font-semibold text-white">{{ name }}</h3>
+        <div class="flex items-center gap-2">
+            <h3 class="text-base font-semibold text-white">{{ name }}</h3>
+            {% if project.execution == 'remote' %}
+            <span class="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold bg-purple-600/20 text-purple-400 border border-purple-500/30">Swarm</span>
+            {% endif %}
+        </div>
         <span class="inline-flex items-center rounded-full bg-gray-700 px-2 py-0.5 text-xs font-medium text-gray-300"
               id="project-count-{{ name }}">
             {{ agent_count }} agent{{ 's' if agent_count != 1 else '' }}
