@@ -184,10 +184,15 @@ class TerminalBridge:
         The snapshot is obtained via a regular ``tmux capture-pane`` subprocess
         call (not through the control mode stdin) so we do not need to parse the
         ``%begin``/``%end`` response.
-        """
-        self._clients.append(ws)
 
-        # Send initial snapshot
+        The snapshot is captured **before** the client is added to the internal
+        list so that the concurrent ``_read_output`` loop cannot send live
+        ``%output`` events to the client before the snapshot arrives.
+        """
+        # Capture snapshot BEFORE adding client to the list.
+        # This prevents the _read_output loop from sending live events
+        # before the snapshot (the client isn't in self._clients yet).
+        snapshot = b""
         try:
             proc = await asyncio.create_subprocess_exec(
                 "tmux",
@@ -206,12 +211,23 @@ class TerminalBridge:
                 # Strip trailing blank lines (empty rows from pane padding)
                 while stdout.endswith(b"\r\n\r\n"):
                     stdout = stdout[:-2]
-                await ws.send_bytes(stdout)
+                snapshot = stdout
         except Exception:
             logger.exception(
                 "Failed to capture initial pane snapshot for session %s",
                 self.session_name,
             )
+
+        # Now add client (synchronous — no yield point) and send snapshot.
+        # Because WebSocket maintains send order, the snapshot is guaranteed
+        # to arrive before any live %output events forwarded by _read_output.
+        self._clients.append(ws)
+        if snapshot:
+            # Reset terminal state before sending the snapshot so xterm.js
+            # starts from a known state (clean screen, cursor at home).
+            # DECSTR (soft reset) + cursor home + clear screen.
+            reset_seq = b"\x1b[!p\x1b[H\x1b[2J"
+            await ws.send_bytes(reset_seq + snapshot)
 
     def remove_client(self, ws: WebSocket) -> bool:
         """Remove a WebSocket client.
