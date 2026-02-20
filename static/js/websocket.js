@@ -43,8 +43,6 @@
 
             if (data.type === "agent_update") {
                 handleAgentUpdate(data);
-            } else if (data.type === "terminal_output") {
-                handleTerminalOutput(data);
             } else if (data.type === "metrics_update") {
                 handleMetricsUpdate(data);
             }
@@ -204,25 +202,6 @@
                 var detailSub = document.getElementById("detail-sub-count");
                 if (detailSub) detailSub.textContent = data.sub_agent_count;
             }
-        }
-    }
-
-    function handleTerminalOutput(data) {
-        if (window.currentAgentId !== data.agent_id) return;
-
-        var terminal = document.getElementById("terminal-view");
-        if (!terminal) return;
-
-        if (window._terminalAutoScroll === false) return;
-
-        window._ignoreScrollUntil = Date.now() + 200;
-        if (window._ansiUp) {
-            terminal.innerHTML = window._ansiUp.ansi_to_html(data.output);
-        } else {
-            terminal.textContent = data.output;
-        }
-        if (window._terminalAutoScroll !== false) {
-            terminal.scrollTop = terminal.scrollHeight;
         }
     }
 

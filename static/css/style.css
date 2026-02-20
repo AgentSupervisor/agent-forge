@@ -400,6 +400,19 @@ body {
     word-break: break-word;
 }
 
+/* xterm.js terminal overrides */
+#terminal-container .xterm {
+    padding: 8px;
+}
+
+#terminal-container .xterm-viewport {
+    background: #080a0e !important;
+}
+
+#terminal-container .xterm-screen {
+    padding: 8px 12px;
+}
+
 /* ---- Form inputs ---- */
 .input, .textarea, .select {
     width: 100%;

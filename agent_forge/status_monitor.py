@@ -177,7 +177,6 @@ class StatusMonitor:
                 await save_snapshot(self.db, agent)
 
             await self.ws_manager.broadcast_agent_update(agent)
-            await self.ws_manager.broadcast_terminal_output(agent.id, output)
 
         # Collect and broadcast metrics at configured interval
         if self.metrics_collector:
