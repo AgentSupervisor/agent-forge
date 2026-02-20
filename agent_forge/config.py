@@ -105,11 +105,35 @@ class ProjectConfig(BaseModel):
     channels: list[ChannelBinding] = []
     agent_instructions: str = ""
     context_files: list[str] = []
+    execution: str = "local"
+    execution_reason: str = ""
 
     @field_validator("path")
     @classmethod
     def expand_path(cls, v: str) -> str:
         return str(Path(os.path.expanduser(v)).resolve())
+
+    @field_validator("execution")
+    @classmethod
+    def validate_execution(cls, v: str) -> str:
+        allowed = {"local", "remote"}
+        if v not in allowed:
+            raise ValueError(f"execution must be one of {allowed}, got '{v}'")
+        return v
+
+
+class RemoteConfig(BaseModel):
+    docker_context: str = "vm"
+    vm_ip: str = ""
+    image: str = ""
+    ttyd_port_range_start: int = 30000
+    ttyd_port_range_end: int = 32767
+    cleanup_after_hours: int = 24
+    cpu_limit: str = "1"
+    memory_limit: str = "2G"
+    config_repo: str = ""
+    ttyd_user: str = "agent"
+    ttyd_pass_env: str = "AGENT_TTYD_PASS"
 
 
 class ForgeConfig(BaseModel):
@@ -119,6 +143,7 @@ class ForgeConfig(BaseModel):
     defaults: DefaultsConfig = DefaultsConfig()
     profiles: dict[str, AgentProfile] = {}
     projects: dict[str, ProjectConfig] = {}
+    remote: RemoteConfig | None = None
 
     def get_profile(self, name: str) -> AgentProfile | None:
         """Get a profile by name, or None if not found."""

@@ -263,10 +263,21 @@ class MetricsCollector:
         total_memory = 0.0
         running_count = 0
 
-        from .agent_manager import AgentStatus
+        from .agent_manager import AgentLocation, AgentStatus
 
         for agent in agent_manager.list_agents():
             if agent.status == AgentStatus.STOPPED:
+                continue
+
+            # Remote agents don't have local processes — return placeholder metrics
+            if agent.location == AgentLocation.REMOTE:
+                agents[agent.id] = AgentMetrics(
+                    agent_id=agent.id,
+                    process_count=0,
+                    cpu_percent=0.0,
+                    memory_mb=0.0,
+                )
+                running_count += 1
                 continue
 
             agent_metrics = self.collect_agent(agent)
