@@ -19,6 +19,101 @@
     <!-- Content -->
     <div style="padding: 24px;">
 
+        <!-- Claude Code Usage -->
+        <div style="margin-bottom:32px;" x-show="claudeUsage">
+            <h2 style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); margin-bottom:16px;">Claude Code Usage</h2>
+            <div class="claude-usage-grid">
+
+                <!-- Current Session Card -->
+                <div class="claude-usage-card primary">
+                    <div class="metric-card-header">
+                        <span class="metric-label">Current Session</span>
+                    </div>
+                    <div class="claude-cost-big" x-text="claudeUsage && claudeUsage.current_block ? formatCost(claudeUsage.current_block.total_cost_usd) : '--'">--</div>
+                    <div style="font-size:11px; color:var(--text-muted); margin-bottom:16px;">Current 5h block</div>
+                    <div class="metric-details">
+                        <div class="metric-detail-row">
+                            <span>Input tokens</span>
+                            <span x-text="claudeUsage && claudeUsage.current_block ? formatTokens(claudeUsage.current_block.total_input_tokens) : '--'">--</span>
+                        </div>
+                        <div class="metric-detail-row">
+                            <span>Output tokens</span>
+                            <span x-text="claudeUsage && claudeUsage.current_block ? formatTokens(claudeUsage.current_block.total_output_tokens) : '--'">--</span>
+                        </div>
+                        <div class="metric-detail-row">
+                            <span>Messages</span>
+                            <span x-text="claudeUsage && claudeUsage.current_block ? claudeUsage.current_block.message_count : '--'">--</span>
+                        </div>
+                    </div>
+                    <!-- Visual progress bar (indeterminate) -->
+                    <div style="margin-top:16px; height:4px; background:var(--border); border-radius:2px; overflow:hidden;">
+                        <div style="height:100%; width:100%; background:linear-gradient(90deg, rgba(99,102,241,0.15) 0%, rgba(99,102,241,0.6) 50%, rgba(99,102,241,0.15) 100%); background-size:200% 100%; animation:shimmer 2s linear infinite; border-radius:2px;"></div>
+                    </div>
+                </div>
+
+                <!-- Per-Model Breakdown Card -->
+                <div class="claude-usage-card">
+                    <div class="metric-card-header">
+                        <span class="metric-label">Per-Model Breakdown</span>
+                    </div>
+                    <template x-if="claudeUsage && claudeUsage.current_block && Object.keys(claudeUsage.current_block.models).length > 0">
+                        <div>
+                            <template x-for="[modelKey, modelData] in Object.entries(claudeUsage.current_block.models)" :key="modelKey">
+                                <div class="model-row">
+                                    <div class="model-name">
+                                        <span class="model-dot" :class="modelClass(modelKey)"></span>
+                                        <span x-text="modelDisplayName(modelKey)"></span>
+                                    </div>
+                                    <div class="model-stats">
+                                        <div x-text="formatTokens(modelData.input_tokens + modelData.output_tokens) + ' tokens'"></div>
+                                        <div x-text="formatCost(modelData.cost_usd)"></div>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+                    <template x-if="!claudeUsage || !claudeUsage.current_block || Object.keys(claudeUsage.current_block.models).length === 0">
+                        <div style="color:var(--text-muted); font-size:13px; padding:16px 0;">No model data</div>
+                    </template>
+                </div>
+
+                <!-- Burn Rate Card -->
+                <div class="claude-usage-card">
+                    <div class="metric-card-header">
+                        <span class="metric-label">Burn Rate</span>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:20px; padding-top:8px;">
+                        <div>
+                            <div class="burn-rate-value" x-text="claudeUsage && claudeUsage.current_block && claudeUsage.current_block.burn_rate_tokens_per_min != null ? formatTokens(claudeUsage.current_block.burn_rate_tokens_per_min) : '--'">--</div>
+                            <div class="burn-rate-label">tokens / min</div>
+                        </div>
+                        <div>
+                            <div class="burn-rate-value" x-text="claudeUsage && claudeUsage.current_block && claudeUsage.current_block.burn_rate_cost_per_hour != null ? formatCost(claudeUsage.current_block.burn_rate_cost_per_hour / 60) : '--'">--</div>
+                            <div class="burn-rate-label">cost / min</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 24h Total Card -->
+                <div class="claude-usage-card">
+                    <div class="metric-card-header">
+                        <span class="metric-label">24h Total</span>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:20px; padding-top:8px;">
+                        <div>
+                            <div class="burn-rate-value" x-text="claudeUsage ? formatTokens(claudeUsage.total_tokens_24h) : '--'">--</div>
+                            <div class="burn-rate-label">total tokens</div>
+                        </div>
+                        <div>
+                            <div class="burn-rate-value" x-text="claudeUsage ? formatCost(claudeUsage.total_cost_24h) : '--'">--</div>
+                            <div class="burn-rate-label">total cost</div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
         <!-- System Overview Cards -->
         <div style="margin-bottom:32px;">
             <h2 style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); margin-bottom:16px;">System Overview</h2>
@@ -315,6 +410,8 @@ function metricsPage() {
     }
 
     return {
+        claudeUsage: null,
+
         init() {
             _initCharts();
             // Load initial snapshot from REST API
@@ -324,10 +421,51 @@ function metricsPage() {
                     if (data) _updatePage({ system: data.system, agents: data.agents });
                 })
                 .catch(function (e) { console.error('Failed to load initial metrics:', e); });
+            // Load Claude usage data
+            this.loadClaudeUsage();
+            var self = this;
+            setInterval(function () { self.loadClaudeUsage(); }, 60000);
         },
 
         updateMetrics(data) {
             _updatePage(data);
+            if (data.claude_usage) {
+                this.claudeUsage = data.claude_usage;
+            }
+        },
+
+        loadClaudeUsage() {
+            var self = this;
+            fetch('/api/claude-usage')
+                .then(function (res) { return res.ok ? res.json() : null; })
+                .then(function (data) { self.claudeUsage = data; })
+                .catch(function (e) { console.error('Failed to load Claude usage:', e); });
+        },
+
+        formatTokens(n) {
+            if (n == null) return '--';
+            if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+            if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+            return String(Math.round(n));
+        },
+
+        formatCost(n) {
+            if (n == null) return '--';
+            return '$' + Number(n).toFixed(2);
+        },
+
+        modelDisplayName(key) {
+            // Strip "claude-" prefix and version suffix, capitalise first letter
+            var name = key.replace(/^claude-/i, '').split('-')[0];
+            return name.charAt(0).toUpperCase() + name.slice(1);
+        },
+
+        modelClass(key) {
+            var lower = key.toLowerCase();
+            if (lower.includes('opus')) return 'opus';
+            if (lower.includes('sonnet')) return 'sonnet';
+            if (lower.includes('haiku')) return 'haiku';
+            return '';
         },
     };
 

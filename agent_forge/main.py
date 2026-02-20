@@ -23,6 +23,7 @@ from pydantic import BaseModel
 import json
 
 from .agent_manager import AgentManager
+from .claude_usage_collector import ClaudeUsageCollector
 from .config import (
     ChannelBinding,
     ConnectorConfig,
@@ -144,6 +145,12 @@ async def lifespan(app: FastAPI):
     app.state.started_at = time.time()
     terminal_bridges = TerminalBridgeManager()
     app.state.terminal_bridges = terminal_bridges
+
+    # Claude Code usage collector
+    claude_usage = ClaudeUsageCollector()
+    app.state.claude_usage = claude_usage
+    if status_monitor:
+        status_monitor.claude_usage_collector = claude_usage
 
     yield
 
@@ -626,6 +633,14 @@ async def api_metrics(request: Request):
     if not monitor or not monitor.metrics_collector:
         raise HTTPException(status_code=503, detail="Metrics collection not available")
     snapshot = monitor.metrics_collector.collect_all(request.app.state.agent_manager)
+    return snapshot.model_dump(mode="json")
+
+
+@app.get("/api/claude-usage")
+async def api_claude_usage(request: Request, hours: int = 24):
+    """Return Claude Code token usage data."""
+    collector: ClaudeUsageCollector = request.app.state.claude_usage
+    snapshot = collector.collect(hours_back=hours)
     return snapshot.model_dump(mode="json")
 
 

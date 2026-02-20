@@ -915,3 +915,98 @@ select.input {
 .agent-metrics-table tbody tr:hover {
     background: var(--bg-card-hover);
 }
+
+/* ---- Claude Usage Section ---- */
+.claude-usage-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+}
+
+.claude-usage-card {
+    background: linear-gradient(135deg, var(--bg-card) 0%, rgba(24, 27, 34, 0.8) 100%);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    transition: all 0.2s;
+}
+
+.claude-usage-card:hover {
+    border-color: var(--border-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+}
+
+.claude-usage-card.primary {
+    border-color: rgba(99, 102, 241, 0.3);
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, var(--bg-card) 100%);
+}
+
+.claude-cost-big {
+    font-size: 36px;
+    font-weight: 800;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    margin: 8px 0;
+}
+
+.model-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(40, 45, 56, 0.5);
+}
+
+.model-row:last-child {
+    border-bottom: none;
+}
+
+.model-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 8px;
+    flex-shrink: 0;
+}
+
+.model-dot.opus   { background: #8b5cf6; }
+.model-dot.sonnet { background: #3b82f6; }
+.model-dot.haiku  { background: #10b981; }
+
+.model-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+}
+
+.model-stats {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.burn-rate-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+
+.burn-rate-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+@keyframes shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}

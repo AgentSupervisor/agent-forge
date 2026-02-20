@@ -69,12 +69,15 @@ class WebSocketManager:
             "output": output,
         })
 
-    async def broadcast_metrics(self, snapshot: MetricsSnapshot) -> None:
+    async def broadcast_metrics(self, snapshot: MetricsSnapshot, claude_usage: dict | None = None) -> None:
         """Broadcast system and agent metrics to all connected clients."""
-        await self.broadcast({
+        msg = {
             "type": "metrics_update",
             "system": snapshot.system.model_dump(mode="json"),
             "agents": {k: v.model_dump(mode="json") for k, v in snapshot.agents.items()},
             "total_agents_running": snapshot.total_agents_running,
             "total_agent_memory_mb": snapshot.total_agent_memory_mb,
-        })
+        }
+        if claude_usage is not None:
+            msg["claude_usage"] = claude_usage
+        await self.broadcast(msg)
