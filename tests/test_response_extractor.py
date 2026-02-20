@@ -92,6 +92,65 @@ class TestPreprocessOutput:
         result = preprocess_output(raw)
         assert "(thinking)" not in result
 
+    def test_filters_tool_call_headers(self):
+        """Lines like Bash(...) and Read(...) should be filtered as noise."""
+        raw = "Some output\nBash(git log --oneline -5)\nRead(/path/to/file.py)\nMore output"
+        result = preprocess_output(raw)
+        assert "Some output" in result
+        assert "More output" in result
+        assert "Bash(git log" not in result
+        assert "Read(/path/to/file.py)" not in result
+
+    def test_filters_tool_output_markers(self):
+        """Lines starting with ⎿ should be filtered."""
+        raw = "Real text\n  ⎿  a33d24a fix: something\n  ⎿  1e127f9 fix: else\nMore text"
+        result = preprocess_output(raw)
+        assert "Real text" in result
+        assert "More text" in result
+        assert "⎿" not in result
+
+    def test_filters_expand_hints(self):
+        """Lines like '… +10 lines (ctrl+o to expand)' should be filtered."""
+        raw = "Line A\n… +10 lines (ctrl+o to expand)\nLine B"
+        result = preprocess_output(raw)
+        assert "Line A" in result
+        assert "Line B" in result
+        assert "ctrl+o" not in result
+
+    def test_filters_git_diff_markers(self):
+        """Git diff header lines should be filtered as noise."""
+        raw = (
+            "Result text\n"
+            "diff --git a/agent_forge/main.py b/agent_forge/main.py\n"
+            "index abc123..def456 100644\n"
+            "--- a/agent_forge/main.py\n"
+            "+++ b/agent_forge/main.py\n"
+            "End text"
+        )
+        result = preprocess_output(raw)
+        assert "Result text" in result
+        assert "End text" in result
+        assert "diff --git" not in result
+        assert "index abc123" not in result
+        assert "--- a/" not in result
+        assert "+++ b/" not in result
+
+    def test_strips_complete_tool_blocks(self):
+        """A tool header followed by ⎿ output lines should all be stripped as a unit."""
+        raw = (
+            "Some agent text\n"
+            "Bash(git log --oneline -5)\n"
+            "  ⎿  a33d24a fix: something\n"
+            "  ⎿  1e127f9 fix: something else\n"
+            "More agent text"
+        )
+        result = preprocess_output(raw)
+        assert "Some agent text" in result
+        assert "More agent text" in result
+        assert "Bash(git log" not in result
+        assert "a33d24a" not in result
+        assert "1e127f9" not in result
+
 
 class TestExtractResponseRegex:
     def test_returns_last_50_meaningful_lines(self):
@@ -139,6 +198,52 @@ class TestExtractResponseRegex:
         result = extract_response_regex(raw)
         assert "The answer is 42." in result.text
         assert "ai(thinking)" not in result.text
+
+    def test_extracts_last_response_block(self):
+        """A ⏺ text block after tool calls should be extracted, not the tool call."""
+        raw = (
+            "⏺ Bash(git push -u origin branch)\n"
+            "  ⎿  remote: Create a pull request...\n"
+            "     remote: https://github.com/...\n"
+            "⏺ Done. Here's the summary:\n"
+            "  Bug: ReferenceError in CompetitionScoreRow\n"
+            "  Fix: Changed import styles to import useStyles\n"
+            "  PR: https://github.com/example/pull/10 — merged into release/1.2.0"
+        )
+        result = extract_response_regex(raw)
+        assert "Done. Here's the summary:" in result.text
+        assert "Bug: ReferenceError" in result.text
+        assert "PR: https://github.com/example/pull/10" in result.text
+        assert "git push" not in result.text
+        assert "remote: Create" not in result.text
+
+    def test_extracts_short_answer_after_tool_calls(self):
+        """A short answer following tool output should be extracted cleanly."""
+        raw = (
+            "⏺ Bash(gh pr view 10 --json state)\n"
+            '  ⎿  {"mergeCommit": {"oid": "d4e59fd"}, "state": "MERGED"}\n'
+            "⏺ I created the PR targeting release/1.2.0, as you requested."
+            " The PR was merged into that branch."
+        )
+        result = extract_response_regex(raw)
+        assert "I created the PR targeting release/1.2.0" in result.text
+        assert "The PR was merged into that branch." in result.text
+        assert "gh pr view" not in result.text
+        assert "MERGED" not in result.text
+
+    def test_fallback_strips_tool_blocks(self):
+        """Without ⏺ markers, the fallback should still strip tool blocks."""
+        raw = (
+            "Starting work\n"
+            "Bash(pytest tests/ -v)\n"
+            "  ⎿  collected 42 items\n"
+            "  ⎿  42 passed in 1.23s\n"
+            "All tests pass."
+        )
+        result = extract_response_regex(raw)
+        assert "All tests pass." in result.text
+        assert "pytest tests/" not in result.text
+        assert "42 passed" not in result.text
 
 
 class TestExtractResponse:
