@@ -335,17 +335,15 @@ class ClaudeUsageCollector:
             total_cache_read = sum(e["cache_read_tokens"] for e in block_entries)
             total_cost = sum(e["cost_usd"] for e in block_entries)
 
-            # Burn rate (only for active block with at least two entries)
+            # Burn rate (only for active block)
             burn_rate_tpm = None
             burn_rate_cph = None
-            if is_active and len(block_entries) >= 2:
-                first_ts = block_entries[0]["timestamp"]
+            if is_active and block_entries:
                 last_ts = block_entries[-1]["timestamp"]
-                duration_min = (last_ts - first_ts).total_seconds() / 60
-                if duration_min > 0:
-                    total_tokens = total_input + total_output
-                    burn_rate_tpm = total_tokens / duration_min
-                    burn_rate_cph = (total_cost / duration_min) * 60
+                duration_min = max((last_ts - start).total_seconds() / 60, 1.0)
+                total_tokens = total_input + total_output + total_cache_create + total_cache_read
+                burn_rate_tpm = total_tokens / duration_min
+                burn_rate_cph = (total_cost / duration_min) * 60
 
             blocks.append(SessionBlock(
                 start_time=start.isoformat(),
