@@ -267,51 +267,66 @@ class ClaudeUsageCollector:
         return None
 
     def _create_session_blocks(self, entries: list[dict]) -> list[SessionBlock]:
-        """Group entries into 5-hour session blocks."""
+        """Group entries into 5-hour session blocks using dynamic boundaries.
+
+        Blocks start at the rounded-down hour of the first entry in each block
+        and end 5 hours later. A new block is created when an entry falls past
+        the current block's end time, or when there is a gap of 5+ hours between
+        consecutive entries. This matches how Anthropic's rate limit windows work.
+        """
         if not entries:
             return []
 
         now = datetime.now(timezone.utc)
+        block_duration = timedelta(hours=SESSION_BLOCK_HOURS)
+
+        # Build blocks by iterating through sorted entries
+        raw_blocks: list[tuple[datetime, datetime, list[dict]]] = []
+        current_start: datetime | None = None
+        current_end: datetime | None = None
+        current_entries: list[dict] = []
+
+        for entry in entries:
+            ts = entry["timestamp"]
+
+            if current_start is None:
+                # First entry: start a new block at the rounded-down hour
+                current_start = ts.replace(minute=0, second=0, microsecond=0)
+                current_end = current_start + block_duration
+                current_entries = [entry]
+            elif ts >= current_end or (
+                current_entries
+                and (ts - current_entries[-1]["timestamp"]) >= block_duration
+            ):
+                # Entry is past the block end, or 5+ hour gap: finalize current block, start new one
+                raw_blocks.append((current_start, current_end, current_entries))
+                current_start = ts.replace(minute=0, second=0, microsecond=0)
+                current_end = current_start + block_duration
+                current_entries = [entry]
+            else:
+                current_entries.append(entry)
+
+        # Don't forget the last block
+        if current_start is not None and current_entries:
+            raw_blocks.append((current_start, current_end, current_entries))
+
+        # Convert raw blocks to SessionBlock models
         blocks: list[SessionBlock] = []
-
-        # Determine block boundaries.
-        # Current block starts at the most recent 5-hour boundary aligned to midnight UTC.
-        current_block_start = now.replace(
-            hour=(now.hour // SESSION_BLOCK_HOURS) * SESSION_BLOCK_HOURS,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
-
-        # Create blocks going back to cover the earliest entry
-        block_starts: list[datetime] = []
-        block_start = current_block_start
-        earliest = entries[0]["timestamp"]
-        while block_start + timedelta(hours=SESSION_BLOCK_HOURS) > earliest:
-            block_starts.append(block_start)
-            block_start -= timedelta(hours=SESSION_BLOCK_HOURS)
-        block_starts.reverse()
-
-        for start in block_starts:
-            end = start + timedelta(hours=SESSION_BLOCK_HOURS)
-            is_active = start <= now < end
-
-            block_entries = [e for e in entries if start <= e["timestamp"] < end]
-            if not block_entries:
-                continue
+        for start, end, block_entries in raw_blocks:
+            is_active = end > now
 
             # Aggregate per-model stats
             model_stats: dict[str, ModelUsage] = {}
-            for entry in block_entries:
-                m = entry["model"] or "unknown"
+            for e in block_entries:
+                m = e["model"] or "unknown"
                 if m not in model_stats:
                     model_stats[m] = ModelUsage(model=m)
                 ms = model_stats[m]
-                ms.input_tokens += entry["input_tokens"]
-                ms.output_tokens += entry["output_tokens"]
-                ms.cache_creation_tokens += entry["cache_creation_tokens"]
-                ms.cache_read_tokens += entry["cache_read_tokens"]
-                ms.cost_usd += entry["cost_usd"]
+                ms.input_tokens += e["input_tokens"]
+                ms.output_tokens += e["output_tokens"]
+                ms.cache_creation_tokens += e["cache_creation_tokens"]
+                ms.cache_read_tokens += e["cache_read_tokens"]
+                ms.cost_usd += e["cost_usd"]
                 ms.entry_count += 1
 
             total_input = sum(e["input_tokens"] for e in block_entries)
@@ -332,7 +347,7 @@ class ClaudeUsageCollector:
                     burn_rate_tpm = total_tokens / duration_min
                     burn_rate_cph = (total_cost / duration_min) * 60
 
-            block = SessionBlock(
+            blocks.append(SessionBlock(
                 start_time=start.isoformat(),
                 end_time=end.isoformat(),
                 is_active=is_active,
@@ -345,7 +360,6 @@ class ClaudeUsageCollector:
                 models=model_stats,
                 burn_rate_tokens_per_min=burn_rate_tpm,
                 burn_rate_cost_per_hour=burn_rate_cph,
-            )
-            blocks.append(block)
+            ))
 
         return blocks
