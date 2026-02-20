@@ -89,6 +89,10 @@ def create_session(name: str, working_dir: str, command: str) -> bool:
     if result.returncode == 0:
         # Set a large scrollback buffer so users can review agent history
         _run(["tmux", "set-option", "-t", name, "history-limit", "50000"])
+        # Prevent auto-resize when control mode clients attach/detach.
+        # Without this, the TerminalBridge's control mode connection can
+        # cause the window to shrink, corrupting Claude Code's TUI layout.
+        _run(["tmux", "set-option", "-t", name, "window-size", "manual"])
     if result.returncode != 0:
         logger.error(
             "Failed to create tmux session '%s': %s", name, result.stderr.strip()
